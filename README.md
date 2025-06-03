@@ -25,8 +25,8 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 # Installation
 1. Clone the repository
 ```bash
-git clone https://github.com/Rayzheng227/object-detection-monitoring.git
-cd object-detection-monitoring
+git clone https://github.com/Rayzheng227/ProposalAgent.git
+cd ProposalAgent
 ```
 2. Sync virtual enviroment by uv
 ```
