@@ -13,6 +13,10 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 2. 产出包含 **研究背景、目标、方法、时间规划、预期成果** 等要素的完整 Proposal（PDF 形式导出）；
 3. 通过 Reviewer‑Agent 按多维指标打分并给出改进意见，自动迭代直至平均得分达到设定阈值。
 
+## Feature
+- 🔍 引入多源学术数据库检索（ArXiv / IEEE Xplore）
+- 🤖 Reviewer‑Agent RLHF 强化
+- 	🌐 支持多语言 Proposal 输出
 ----
 # 以下是临时记录一些东西的地方
 
