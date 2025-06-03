@@ -17,6 +17,22 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 - 🔍 引入多源学术数据库检索（ArXiv / IEEE Xplore）
 - 🤖 Reviewer‑Agent RLHF 强化
 - 	🌐 支持多语言 Proposal 输出
+
+# Requirements
+- `python>=3.10`
+- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)
+
+# Installation
+1. Clone the repository
+```bash
+git clone https://github.com/Rayzheng227/object-detection-monitoring.git
+cd object-detection-monitoring
+```
+2. Sync virtual enviroment by uv
+```
+uv sync
+```
+3. 若后续开发有增加所需的库等操作，执行`uv add xxx`，如`uv add numpy`，会自动在`pyproject.toml`中以及`.venv`中增加相关库
 ----
 # 以下是临时记录一些东西的地方
 
