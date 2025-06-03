@@ -16,3 +16,20 @@ A Proposal Agent for Advanced AI Course in HIAS
 
 可视化界面(Web UI)
 
+搜索：tavily API
+
+
+# 问题
+
+如何判断输出结果好坏？
+
+# 任务分工
+
+Agent框架(Langchain\Langgraph)————> 郑
+
+
+==RAG参考文本==、Web UI ————> 谢
+
+联网搜索功能实现 ————>
+
+
