@@ -1,4 +1,5 @@
 import arxiv
+from crossref.restful import Works
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
@@ -15,9 +16,11 @@ import os
 from datetime import datetime
 import logging
 from prompts import *
+import fitz
 
 """
-API的配置——[TODO]同步到网上前记得修改！
+API的配置—— 
+TODO:同步到网上前记得修改！
 """
 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_API_KEY = "sk-eafdf8e1d0fb4717a883c87788e76182"
@@ -120,6 +123,7 @@ def search_arxiv_papers_tool(query: str, max_results: int = 5, Download = True) 
         return [{"error": f"ArXiv搜索失败: {str(e)}"}]
     
 
+
 # 定义网络搜索工具
 @tool
 def search_web_content_tool(query: str) -> List[Dict]:
@@ -146,6 +150,101 @@ def search_web_content_tool(query: str) -> List[Dict]:
     except Exception as e:
         return [{"error": f"网络搜索失败: {str(e)}"}]
     
+
+@tool
+def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
+    """
+    使用 CrossRef 搜索论文元数据的工具
+
+    Args:
+        query: 关键词或主题
+        max_results: 返回结果数量上限（默认5）
+
+    Returns:
+        包含论文信息的字典列表
+    """
+    try:
+        works = Works()
+        search = works.query(query).sort('relevance')
+
+        results = []
+        for i, item in enumerate(search):
+            if i >= max_results:
+                break
+
+            paper_info = {
+                "title": item.get("title", ["No title"])[0],
+                "authors": [
+                    f"{author.get('given', '')} {author.get('family', '')}".strip()
+                    for author in item.get("author", [])
+                ],
+                "doi": item.get("DOI", "N/A"),
+                "published": "-".join(str(d) for d in item.get("issued", {}).get("date-parts", [[None]])[0]),
+                "publisher": item.get("publisher", "N/A"),
+                "journal": item.get("container-title", ["N/A"])[0],
+                "url": item.get("URL", "N/A")
+            }
+
+            results.append(paper_info)
+
+        return results
+
+    except Exception as e:
+        return [{"error": f"CrossRef 搜索失败: {str(e)}"}]
+
+
+@tool
+def summarize_pdf(path: str, max_chars: int = 3000) -> Dict:
+    """
+    从 PDF 中提取文本并生成摘要。
+
+    Args:
+        path: PDF 文件的路径
+        max_chars: 提取的最大字符数（避免超长输入，默认 3000）
+
+    Returns:
+        包含原始文本片段和生成摘要的字典
+    """
+    try:
+        # 1. 打开并提取 PDF 文本
+        doc = fitz.open(path)
+        full_text = ""
+        for page in doc:
+            full_text += page.get_text()
+            if len(full_text) > max_chars:
+                full_text = full_text[:max_chars]
+                break
+
+        doc.close()
+
+        if not full_text.strip():
+            return {"error": "PDF 文件中未找到可用文本"}
+
+        # 2. 构造摘要提示
+        prompt = f"""
+        You are an academic assistant.
+        Summarize the following academic text into a concise paragraph (around 150-200 words).
+        Focus on key contributions, methodology, and findings if identifiable.
+
+        Text:
+        \"\"\"
+        {full_text}
+        \"\"\"
+        """
+
+        # 3. 调用语言模型（你可根据使用的 LLM 接口替换）
+        from langchain.chat_models import ChatOpenAI
+        llm = ChatOpenAI(temperature=0, model="qwen-plus", base_url=base_url, api_key=DASHSCOPE_API_KEY)
+
+        response = llm.invoke(prompt)
+
+        return {
+            "summary": response.content.strip(),
+            "source_excerpt": full_text[:500] + "..."  # 返回前 500 字用于上下文参考
+        }
+
+    except Exception as e:
+        return {"error": f"PDF 摘要失败: {str(e)}"}
 
 class ProposalAgent:
     def __init__(self):
@@ -802,6 +901,15 @@ TODO: 已完成简单的搜索功能等内容
 """
 
 if __name__ == "__main__":
+    query = "transformer neural network"
+    results = search_crossref_papers_tool.invoke({
+    "query": query,
+    "max_results": 3
+})
+
+    print(results)
+    import sys
+    sys.exit(0)
     agent = ProposalAgent()
     research_question = "人工智能在抑郁症领域的应用"
     result = agent.generate_proposal(research_question)

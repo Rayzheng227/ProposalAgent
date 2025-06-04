@@ -43,9 +43,10 @@ uv run agent.py
 # 以下是临时记录一些东西的地方
 
 1. pdf/其他格式导出的部分 ————————————>str(由md组成)
-2. 加入Reviewer相关部分————接收人类标注的结果(结构、内容)
+2. **加入Reviewer相关部分**————接收人类标注的结果(结构、内容)
 3. 前端webui,可参考[这里](https://github.com/google-gemini/gemini-fullstack-langgraph-quickstart.git)
-
+4. (maybe)加入中间的反思
+5. 加入其他搜索源
   
 
 
