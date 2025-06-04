@@ -32,85 +32,20 @@ cd ProposalAgent
 ```
 uv sync
 ```
-3. 若后续开发有增加所需的库等操作，执行`uv add xxx`，如`uv add numpy`，会自动在`pyproject.toml`中以及`.venv`中增加相关库
+3. RUNNNN
+```
+uv run agent.py
+```
+4. 若后续开发有增加所需的库等操作，执行`uv add xxx`，如`uv add numpy`，会自动在`pyproject.toml`中以及`.venv`中增加相关库
+
 ----
+
 # 以下是临时记录一些东西的地方
 
-## 大致流程
+1. pdf/其他格式导出的部分 ————————————>str(由md组成)
+2. 加入Reviewer相关部分————接收人类标注的结果(结构、内容)
+3. 前端webui,可参考[这里](https://github.com/google-gemini/gemini-fullstack-langgraph-quickstart.git)
 
-输入研究领域和方向————>允许参考案例(在Arxiv、github、Google Scholar上等内容）——>分步骤生成文本——>转换为文档
-
-可视化界面(Web UI)
-
-搜索：tavily API
-
-
-## 问题
-
-如何判断输出结果好坏？
-工具调用：哪些需要调用？
-
-## 任务分工
-
-Agent框架(Langchain\Langgraph)————> 郑
-
-==RAG参考文本==、Web UI ————> 谢
-
-## arxiv的调用
-```python
-import arxiv
- 
-# 构建默认的API客户端。
-client = arxiv.Client()
- 
-# 搜索关键词为 "quantum" 的最新的10篇文章。
-search = arxiv.Search(
-  query="quantum",
-  max_results=10,
-  sort_by=arxiv.SortCriterion.SubmittedDate
-)
- 
-results = client.results(search)
- 
-# `results` 是一个生成器；你可以逐个遍历其元素...
-for r in client.results(search):
-  print(r.title)
-# ...或者将其全部转换为列表。注意：对于大型结果集，这可能会很慢。
-all_results = list(results)
-print([r.title for r in all_results])
- 
-# 有关高级查询语法的文档，请参阅arXiv API用户手册：
-# https://arxiv.org/help/api/user-manual#query_details
-search = arxiv.Search(query="au:del_maestro AND ti:checkerboard")
-first_result = next(client.results(search))
-print(first_result)
- 
-# 搜索ID为 "1605.08386v1" 的论文
-search_by_id = arxiv.Search(id_list=["1605.08386v1"])
-# 重用客户端以获取论文，然后打印其标题。
-first_result = next(client.results(search))
-print(first_result.t
-```
-##  Tavily Search的调用
-```python
-from langchain_community.tools import TavilySearchResults
-
-tool = TavilySearchResults(
-    max_results=5,
-    search_depth="advanced",
-    include_answer=True,
-    include_raw_content=True,
-    include_images=True,
-)
-
-
-result = tool.invoke({"query": "What happened at the last wimbledon"})
-
-for item in result:
-    print(f"URL: {item['url']}")
-    print(f"Content: {item['content']}\n")
-
-```
   
 
 
