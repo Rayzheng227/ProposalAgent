@@ -9,7 +9,7 @@
         "properties": {
           "query": {
             "type": "string",
-            "description": "搜索关键词或主题"
+            "description": "搜索关键词或主题，请使用英文关键词"
           },
           "max_results": {
             "type": "integer",
