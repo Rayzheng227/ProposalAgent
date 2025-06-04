@@ -14,6 +14,7 @@ import json
 import os
 from datetime import datetime
 import logging
+from prompts import *
 
 """
 API的配置——[TODO]同步到网上前记得修改！
@@ -50,6 +51,15 @@ class ProposalState(TypedDict):
     execution_memory: List[Dict]  # 已经执行的记忆
     current_step: int  # 当前执行的步骤
     max_iterations: int  # 最大迭代次数
+    introduction: str
+    literature_review: str
+    research_design: str
+    timeline_plan: str
+    expected_results: str
+    reference_list: List[Dict]  # 统一的参考文献列表
+    ref_counter: int  # 参考文献计数器
+    final_references: str  # 最终的参考文献部分
+
 
 
 
@@ -206,46 +216,10 @@ class ProposalAgent:
 
         tools_info = self.get_tools_info_text()
 
-        master_planning_prompt = f"""
-        你是一个资深的科研专家和项目规划师。用户提出了一个研究问题或领域："{research_field}"
-
-        你有以下的工具可以使用:{tools_info}
-
-        请你制定一个全面的研究计划，这个计划应该包括：
-
-        1. **问题理解与分析**
-        - 对研究问题的深入理解
-        - 问题的重要性和研究价值
-        - 预期的研究难点和挑战
-
-        2. **文献调研计划**
-        - 需要检索哪些关键词
-        - 重点关注哪些研究方向
-        - 需要查找哪些类型的文献（理论、实验、综述等）
-        - 文献检索的优先级
-
-        3. **研究目标设定**
-        - 总体研究目标
-        - 分解的子目标
-        - 各目标的优先级
-
-        4. **技术路线规划**
-        - 采用什么研究方法
-        - 技术实现思路
-        - 实验设计方案
-
-        5. **工作安排**
-        - 各阶段的工作内容
-        - 时间分配
-        - 里程碑设定
-
-        6. **预期成果**
-        - 期望达到的目标
-        - 可交付的成果
-
-        请基于"{research_field}"这个研究问题，制定一个详细、可行的研究计划。
-        计划要具有指导性，后续的所有工作都将基于这个计划来执行。
-        """
+        master_planning_prompt = master_plan_instruction.format(
+            research_field=research_field,
+            tools_info=tools_info
+        )
         logging.info(f"🤖 Agent正在为 '{research_field}' 制定总体研究计划...")
         response = self.llm.invoke([HumanMessage(content=master_planning_prompt)])
         
@@ -256,6 +230,7 @@ class ProposalAgent:
         state["max_iterations"] = 10
 
         logging.info("✅ 总体研究计划制定完成")
+        logging.info(f"研究计划内容: {state['research_plan']}...")
 
         return state
     
@@ -281,43 +256,12 @@ class ProposalAgent:
 
         
         # 首先让Agent分析计划，确定检索策略
-        plan_analysis_prompt = f"""
-        你是一个资深的科研专家和文献检索专家。用户了解了一个研究领域："{research_field}"，并制定了一个计划。
-        请基于以下的研究计划，分析并确立接下来的步骤
-        研究计划：
-        {research_plan}
-        你有以下的工具可以调用：{tools_info}
-
-        {memory_text}
-        
-        基于上述研究计划和执行历史，请生成接下来需要执行的具体步骤。每个步骤应该是可执行的行动。
-        
-        请按以下JSON格式返回执行计划：
-        {{
-            "steps": [
-                {{
-                    "step_id": 1,
-                    "action": "search_arxiv_papers",
-                    "parameters": {{"query": "关键词", "max_results": 5}},
-                    "description": "搜索ArXiv上关于xxx的论文",
-                    "expected_outcome": "找到相关的学术论文"
-                }},
-                {{
-                    "step_id": 2,
-                    "action": "search_web_content",
-                    "parameters": {{"query": "关键词"}},
-                    "description": "搜索网络上关于xxx的最新信息",
-                    "expected_outcome": "获取最新的研究动态"
-                }}
-            ]
-        }}
-        
-        注意：
-        1. 如果之前的执行结果不理想，请调整策略
-        2. 每次最多生成3-5个步骤
-        3. 步骤应该是具体的、可执行的
-        4. 考虑执行历史，避免重复无效的搜索
-        """
+        plan_analysis_prompt = EXECUTION_PLAN_PROMPT.format(
+            research_field=research_field,
+            research_plan=research_plan,
+            tools_info=tools_info,
+            memory_text=memory_text
+        )
         logging.info("🔍 Agent正在分析计划并生成执行步骤...")
         response = self.llm.invoke([HumanMessage(content=plan_analysis_prompt)])
         logging.info("生成计划", response.content)
@@ -389,6 +333,9 @@ class ProposalAgent:
                 if isinstance(result, list) and len(result) > 0:
                     state["web_search_results"].extend(result)
             
+            # 每次收集到新数据后，立即更新参考文献列表
+            state = self.add_references_from_data(state)
+            
             # 记录执行结果
             execution_memory.append({
                 "step_id": current_step + 1,
@@ -413,9 +360,320 @@ class ProposalAgent:
         
         return state
     
+    def add_references_from_data(self, state: ProposalState) -> ProposalState:
+        """从收集的数据中提取并添加参考文献"""
+        arxiv_papers = state.get("arxiv_papers", [])
+        web_results = state.get("web_search_results", [])
+        reference_list = state.get("reference_list", [])
+        ref_counter = state.get("ref_counter", 1)
+        
+        # 处理ArXiv论文
+        for paper in arxiv_papers:
+            if "error" not in paper:
+                # 检查是否已经存在
+                paper_title = paper.get('title', 'Unknown')
+                existing_ref = next((ref for ref in reference_list if ref.get('title') == paper_title), None)
+                
+                if not existing_ref:
+                    reference_list.append({
+                        "id": ref_counter,
+                        "type": "ArXiv",
+                        "title": paper_title,
+                        "authors": paper.get('authors', []),
+                        "published": paper.get('published', 'Unknown'),
+                        "arxiv_id": paper.get('arxiv_id', ''),
+                        "categories": paper.get('categories', []),
+                        "summary": paper.get('summary', '')
+                    })
+                    ref_counter += 1
+        
+        # 处理网络搜索结果
+        for result in web_results:
+            if "error" not in result:
+                result_title = result.get('title', result.get('url', 'Unknown'))
+                existing_ref = next((ref for ref in reference_list if ref.get('title') == result_title), None)
+                
+                if not existing_ref:
+                    reference_list.append({
+                        "id": ref_counter,
+                        "type": "Web",
+                        "title": result_title,
+                        "url": result.get('url', ''),
+                        "content_preview": result.get('content', result.get('snippet', 'No content'))[:200]
+                    })
+                    ref_counter += 1
+        
+        state["reference_list"] = reference_list
+        state["ref_counter"] = ref_counter
+        
+        return state
+    
+    def get_literature_summary_with_refs(self, state: ProposalState) -> str:
+        """获取带有统一编号的文献摘要"""
+        reference_list = state.get("reference_list", [])
+        
+        literature_summary = ""
+        
+        # 按类型分组显示
+        arxiv_refs = [ref for ref in reference_list if ref.get("type") == "ArXiv"]
+        web_refs = [ref for ref in reference_list if ref.get("type") == "Web"]
+        
+        if arxiv_refs:
+            literature_summary += "\n\n**相关ArXiv论文：**\n"
+            for ref in arxiv_refs:
+                literature_summary += f"[{ref['id']}] {ref['title']}\n"
+                literature_summary += f"   作者: {', '.join(ref['authors'])}\n"
+                literature_summary += f"   发表时间: {ref['published']}\n"
+                literature_summary += f"   摘要: {ref['summary']}\n"
+                literature_summary += f"   分类: {', '.join(ref['categories'])}\n\n"
+        
+        if web_refs:
+            literature_summary += "\n**相关网络信息：**\n"
+            for ref in web_refs:
+                literature_summary += f"[{ref['id']}] {ref['title']}\n"
+                literature_summary += f"   来源: {ref['url']}\n"
+                literature_summary += f"   内容摘要: {ref['content_preview']}...\n\n"
+        
+        return literature_summary
+    
+    def generate_reference_section(self, state: ProposalState) -> str:
+        """生成格式化的参考文献部分"""
+        reference_list = state.get("reference_list", [])
+        
+        if not reference_list:
+            return ""
+        
+        ref_text = "\n\n## 参考文献\n\n"
+        
+        for ref in reference_list:
+            if ref["type"] == "ArXiv":
+                # ArXiv论文格式
+                authors_str = ", ".join(ref["authors"]) if ref["authors"] else "未知作者"
+                categories_str = ", ".join(ref["categories"]) if ref["categories"] else ""
+                ref_text += f"[{ref['id']}] {authors_str}. {ref['title']}. arXiv:{ref['arxiv_id']} ({ref['published']})"
+                if categories_str:
+                    ref_text += f". Categories: {categories_str}"
+                ref_text += "\n\n"
+            elif ref["type"] == "Web":
+                # 网络资源格式
+                ref_text += f"[{ref['id']}] {ref['title']}. 访问时间: {datetime.now().strftime('%Y-%m-%d')}. URL: {ref['url']}\n\n"
+        
+        return ref_text
+
+    def write_introduction_node(self, state: ProposalState) -> ProposalState:
+        """生成研究计划书的引言部分"""
+        research_field = state["research_field"]
+        research_plan = state["research_plan"]
+        
+        # 使用统一的文献摘要
+        literature_summary = self.get_literature_summary_with_refs(state)
+        
+        citation_instruction = """
+        **引用要求：**
+        1. 当提及相关研究或观点时，必须在句末添加引用标记，格式为 [编号]
+        2. 引用标记对应上述文献列表中的编号
+        3. 例如：人工智能在医疗诊断中显示出巨大潜力[1]，特别是在影像识别领域[2]。
+        4. 不要编造不存在的引用，只能引用上述提供的文献
+        5. 如果某个观点来自多个文献，可以使用 [1,2] 的格式
+        """
+        
+        # 使用prompts.py中的instruction
+        introduction_prompt = f"""
+        {proposal_introduction_instruction}
+        
+        **研究主题：** {research_field}
+        
+        **研究计划：**
+        {research_plan}
+        
+        **已收集的文献和信息：**
+        {literature_summary}
+        {citation_instruction}
+
+        请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的引言部分。
+        
+        要求：
+        1. 必须使用中文撰写
+        2. 至少600字
+        3. 结构清晰，包含研究主题介绍、重要性说明、研究空白到研究问题的推导
+        4. 适当引用已收集的文献，使用上述编号系统
+        5. 语言学术化，适合研究计划书
+        6. **不要在引言部分包含参考文献列表**，只在正文中使用引用标记
+        """
+        
+        logging.info("📝 正在生成研究计划书引言部分...")
+        response = self.llm.invoke([HumanMessage(content=introduction_prompt)])
+        
+        # 只保存引言正文，不包含参考文献
+        state["introduction"] = response.content
+        logging.info("✅ 引言部分生成完成")
+        
+        return state
+
+    def write_literature_review_node(self, state: ProposalState) -> ProposalState:
+        """生成研究计划书的文献综述部分"""
+        research_field = state["research_field"]
+        research_plan = state["research_plan"]
+        introduction_content = state.get("introduction", "")
+        
+        # 使用统一的文献摘要
+        literature_summary = self.get_literature_summary_with_refs(state)
+        
+        # 生成引用指导
+        citation_instruction = """
+        **引用要求：**
+        1. 当提及相关研究、理论或观点时，必须在句末添加引用标记，格式为 [编号]
+        2. 引用标记对应上述文献列表中的编号
+        3. 例如：深度学习在图像识别领域取得了显著进展[1,2]，但在可解释性方面仍存在挑战[3]。
+        4. 不要编造不存在的引用，只能引用上述提供的文献
+        5. 如果某个观点来自多个文献，可以使用 [1,2,3] 的格式
+        6. 在论述不同观点或研究发现时，要明确标注来源
+        7. 对于重要的理论框架或方法论，必须引用相关文献
+        """
+
+        # 连贯性指导
+        coherence_instruction = """
+        **与引言部分的连贯性要求：**
+        1. 仔细阅读已完成的引言部分，理解其中提出的研究问题和识别的研究空白
+        2. 文献综述应该深化和拓展引言中简要提及的研究领域
+        3. 避免重复引言中已经详细阐述的背景信息
+        4. 使用承接性语言，如"基于前述研究问题"、"针对引言中提出的..."等
+        5. 确保文献综述的结论自然过渡到对拟议研究的必要性论证
+        6. 对引言中提及的关键概念和理论进行更深入的文献分析
+        """
+        
+        # 使用prompts.py中的LITERATURE_REVIEW_PROMPT
+        literature_review_prompt = f"""
+        {LITERATURE_REVIEW_PROMPT.format(research_field=research_field)}
+        
+        **研究主题：** {research_field}
+        
+        **研究计划：**
+        {research_plan}
+        
+        **已完成的引言部分：**
+        {introduction_content}
+        
+        **已收集的文献和信息：**
+        {literature_summary}
+        
+        {citation_instruction}
+        
+        {coherence_instruction}
+        
+        请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的文献综述部分。
+        
+        要求：
+        1. 必须使用中文撰写
+        2. 至少800字
+        3. 结构清晰，按主题组织文献，不要逐篇论文介绍
+        4. 重点关注研究趋势、主要观点、研究方法和存在的争议
+        5. 识别研究空白和不足，为后续研究提供依据
+        6. 必须包含适当的文献引用，使用上述编号系统
+        7. 语言学术化，适合研究计划书
+        8. 避免简单罗列，要进行分析和综合
+        9. **与引言部分保持连贯性**，避免重复内容，深化引言中的研究问题
+        10. 使用承接性语言连接引言部分的内容
+        """
+        
+        logging.info("📚 正在生成研究计划书文献综述部分...")
+        response = self.llm.invoke([HumanMessage(content=literature_review_prompt)])
+        
+        # 注意：文献综述不重复添加参考文献部分，因为引言已经包含了完整的参考文献列表
+        state["literature_review"] = response.content
+        logging.info("✅ 文献综述部分生成完成")
+        
+        return state
+
+    def write_research_design_node(self, state: ProposalState) -> ProposalState:
+        """生成研究计划书的研究设计部分"""
+        research_field = state["research_field"]
+        research_plan = state["research_plan"]
+        introduction_content = state.get("introduction", "")
+        literature_review_content = state.get("literature_review", "")
+        
+        # 使用统一的文献摘要
+        literature_summary = self.get_literature_summary_with_refs(state)
+        
+        # 生成引用指导
+        citation_instruction = """
+        **引用要求：**
+        1. 当提及相关研究方法、理论框架或技术时，必须在句末添加引用标记，格式为 [编号]
+        2. 引用标记对应文献列表中的编号
+        3. 例如：本研究将采用混合方法研究设计[5]，结合定量分析和定性访谈[8,12]。
+        4. 不要编造不存在的引用，只能引用已提供的文献
+        5. 在描述方法论依据时要明确标注来源
+        6. 对于重要的分析工具和技术框架，必须引用相关文献
+        """
+
+        # 连贯性指导
+        coherence_instruction = """
+        **与前文的连贯性要求：**
+        1. 仔细分析引言部分提出的具体研究问题，确保研究设计能够回答这些问题
+        2. 基于文献综述中识别的方法论趋势和研究空白，选择合适的研究方法
+        3. 承接文献综述中提到的理论框架和分析方法，说明如何在本研究中应用或改进
+        4. 使用承接性语言，如"基于前述文献分析"、"针对引言中提出的研究问题"、"借鉴文献综述中的..."等
+        5. 确保研究设计的每个组成部分都与前文建立的研究背景和理论基础相呼应
+        6. 明确说明为什么选择的方法适合解决引言中提出的研究问题
+        """
+        
+        # 使用prompts.py中的PROJECT_DESIGN_PROMPT
+        research_design_prompt = f"""
+        {PROJECT_DESIGN_PROMPT.format(research_field=research_field)}
+        
+        **研究主题：** {research_field}
+        
+        **研究计划：**
+        {research_plan}
+        
+        **已完成的引言部分：**
+        {introduction_content}
+        
+        **已完成的文献综述部分：**
+        {literature_review_content}
+        
+        **已收集的文献和信息：**
+        {literature_summary}
+        
+        {citation_instruction}
+        
+        {coherence_instruction}
+        
+        请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的研究设计部分。
+        
+        要求：
+        1. 必须使用中文撰写
+        2. 至少800字
+        3. 结构清晰，包含数据来源、研究方法、分析策略、工作流程等
+        4. 明确回应引言中提出的研究问题
+        5. 基于文献综述中的方法论分析，选择合适的研究方法
+        6. 必须包含适当的文献引用，使用统一编号系统
+        7. 语言学术化，适合研究计划书
+        8. **与引言和文献综述保持逻辑连贯性**
+        9. 使用承接性语言连接前文内容
+        10. 说明研究设计的可行性和局限性
+        """
+        
+        logging.info("🔬 正在生成研究计划书研究设计部分...")
+        response = self.llm.invoke([HumanMessage(content=research_design_prompt)])
+        
+        state["research_design"] = response.content
+        logging.info("✅ 研究设计部分生成完成")
+        
+        return state
+
+    def generate_final_references_node(self, state: ProposalState) -> ProposalState:
+        """生成最终的参考文献部分"""
+        reference_section = self.generate_reference_section(state)
+        
+        # 将参考文献作为独立部分保存
+        state["final_references"] = reference_section
+        logging.info("✅ 参考文献部分生成完成")
+        
+        return state
 
     def should_continue(self, state: ProposalState) -> str:
-        """决定是否继续执行或重新规划"""
+        """决定是否继续执行或进入写作阶段"""
         current_step = state.get("current_step", 0)
         execution_plan = state.get("execution_plan", [])
         execution_memory = state.get("execution_memory", [])
@@ -423,30 +681,42 @@ class ProposalAgent:
         
         # 检查是否达到最大迭代次数
         if len(execution_memory) >= max_iterations:
-            return "end"
+            logging.info("达到最大迭代次数，进入写作阶段")
+            return "write_introduction"
         
         # 检查是否还有步骤要执行
         if current_step < len(execution_plan):
             return "execute_step"
         
-        # 检查最近的执行结果
-        recent_results = execution_memory[-3:] if len(execution_memory) >= 3 else execution_memory
-        successful_results = [r for r in recent_results if r.get("success", False)]
-        
-        # 如果最近的结果都不成功，或者需要更多信息，重新规划
-        if len(successful_results) < len(recent_results) * 0.5:
-            logging.info("最近执行结果不理想，重新规划...")
-            return "plan_analysis"
-        
         # 检查是否收集到足够的信息
         arxiv_papers = state.get("arxiv_papers", [])
         web_results = state.get("web_search_results", [])
         
-        if len(arxiv_papers) < 3 and len(web_results) < 3:
-            logging.info("信息收集不足，继续规划...")
+        logging.info(f"当前收集情况: {len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果")
+        
+        # 如果已经收集到足够的信息，进入写作阶段
+        if len(arxiv_papers) >= 3 or len(web_results) >= 3:
+            logging.info("已收集到足够信息，进入写作阶段")
+            return "write_introduction"
+        
+        # 检查最近的执行结果
+        recent_results = execution_memory[-3:] if len(execution_memory) >= 3 else execution_memory
+        successful_results = [r for r in recent_results if r.get("success", False)]
+        
+        # 如果最近的结果都不成功，重新规划
+        if len(successful_results) < len(recent_results) * 0.3:
+            logging.info("最近执行结果不理想，重新规划...")
+            state["current_step"] = 0
             return "plan_analysis"
         
-        return "end"
+        # 如果执行了一轮但信息不足，继续规划
+        if len(arxiv_papers) < 3 and len(web_results) < 3:
+            logging.info("信息收集不足，继续规划...")
+            state["current_step"] = 0
+            return "plan_analysis"
+        
+        # 默认进入写作阶段
+        return "write_introduction"
     
     
     
@@ -458,6 +728,10 @@ class ProposalAgent:
         workflow.add_node("create_master_plan", self.create_master_plan_node)
         workflow.add_node("plan_analysis", self.plan_analysis_node)
         workflow.add_node("execute_step", self.execute_step_node)
+        workflow.add_node("write_introduction", self.write_introduction_node)
+        workflow.add_node("write_literature_review", self.write_literature_review_node)
+        workflow.add_node("write_research_design", self.write_research_design_node)
+        workflow.add_node("generate_final_references", self.generate_final_references_node)
         
         # 定义流程
         workflow.set_entry_point("create_master_plan")
@@ -476,9 +750,14 @@ class ProposalAgent:
             {
                 "execute_step": "execute_step",  # 继续执行下一步
                 "plan_analysis": "plan_analysis",  # 重新规划
-                "end": END  # 结束
+                "write_introduction": "write_introduction" 
             }
         )
+        
+        workflow.add_edge("write_introduction", "write_literature_review")
+        workflow.add_edge("write_literature_review", "write_research_design")
+        workflow.add_edge("write_research_design", "generate_final_references")
+        workflow.add_edge("generate_final_references", END)
         
         return workflow.compile()
     
@@ -501,20 +780,34 @@ class ProposalAgent:
             execution_plan=[],
             execution_memory=[],
             current_step=0,
-            max_iterations=10
+            max_iterations=10,
+            introduction="",
+            literature_review="",
+            research_design="",
+            timeline_plan="",
+            expected_results="",
+            reference_list=[],  # 初始化统一参考文献列表
+            ref_counter=1,      # 初始化参考文献计数器
+            final_references="" # 添加最终参考文献字段
         )
         
         logging.info(f"🚀 开始处理研究问题: '{research_field}'")
         result = self.workflow.invoke(initial_state)
         return result
 
+
+"""
+TODO: 已完成简单的搜索功能等内容
+下一步：生成报告相关
+"""
+
 if __name__ == "__main__":
     agent = ProposalAgent()
-    research_question = "人工智能在医疗领域的应用"
+    research_question = "人工智能在抑郁症领域的应用"
     result = agent.generate_proposal(research_question)
     print("\n" + "="*60)
-    print("研究计划:")
-    print(result["research_plan"])
+    # print("计划:")
+    # print(result["research_plan"])
     print("\n" + "="*60)
     print(f"执行历史: {len(result['execution_memory'])} 个步骤")
     for memory in result["execution_memory"]:
@@ -522,3 +815,16 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print(f"收集到的论文: {len(result['arxiv_papers'])} 篇")
     print(f"网络搜索结果: {len(result['web_search_results'])} 条")
+    print(f"统一参考文献: {len(result['reference_list'])} 条")
+    print("\n" + "="*60)
+    print("引言部分:")
+    print(result["introduction"])
+    print("\n" + "="*60)
+    print("文献综述部分:")
+    print(result["literature_review"])
+    print("\n" + "="*60)
+    print("研究设计部分:")
+    print(result["research_design"])
+    print("\n" + "="*60)
+    print("参考文献部分:")
+    print(result["final_references"])
