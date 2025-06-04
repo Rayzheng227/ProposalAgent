@@ -1,2 +1,7 @@
-Papers/
+# 忽略 Papers 文件夹中的所有内容
+Papers/*
+output/*
+
+# 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep
+!output/.gitkeep

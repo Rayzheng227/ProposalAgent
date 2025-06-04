@@ -65,6 +65,17 @@ Each step should be:
 - **Non-redundant**: avoid repeating failed or already completed tasks
 - **Strategic**: prioritize steps that help advance the research plan meaningfully
 
+**Available Actions:**
+- `search_arxiv_papers`: Search and download ArXiv papers
+- `search_web_content`: Search web content using Tavily
+- `search_crossref_papers`: Search academic papers via CrossRef
+- `summarize_pdf`: Summarize downloaded PDF files (use this for important papers after downloading)
+
+**Strategy for PDF Analysis:**
+1. First search and download relevant papers using arxiv or crossref tools
+2. For the most important/relevant papers, use summarize_pdf to get detailed analysis
+3. Use the PDF path from the download results (usually in "./Papers/" directory)
+
 Please return your output in the following **strict JSON format**:
 
 ```json
@@ -79,13 +90,16 @@ Please return your output in the following **strict JSON format**:
     }},
     {{
       "step_id": 2,
-      "action": "search_web_content",
-      "parameters": {{"query": "example query"}},
-      "description": "Search the web for latest news or blog content on Y",
-      "expected_outcome": "Retrieve up-to-date information from credible sources"
+      "action": "summarize_pdf",
+      "parameters": {{"path": "./Papers/2025.12345v1_Example_Paper.pdf"}},
+      "description": "Summarize the most relevant downloaded paper",
+      "expected_outcome": "Get detailed analysis of key research findings"
     }}
   ]
 }}
+```
+
+**Note**: When using summarize_pdf, ensure the PDF path corresponds to a file that was actually downloaded in previous steps.
 """
 
 
@@ -154,7 +168,7 @@ The output should serve as a compelling **opening section of a research proposal
 
 Use formal academic tone and cite hypothetical or known examples where appropriate.
 
-
+**Important Note**: This section should focus *only* on the introduction, significance, and research questions. **Do not include** timelines, expected outcomes, or a general summary of the entire proposal, as these will be covered in a separate "Conclusion" section.
 """
 
 LITERATURE_REVIEW_PROMPT = """
@@ -219,7 +233,7 @@ Organize the review around:
 📌 Please return a **Markdown-formatted literature review** of at least 800 words, organized with clear subheadings.
 
 The literature review should complement and deepen the foundation laid in the Introduction, providing a comprehensive academic context for the proposed research.
-
+**Important Note**: This section should focus *only* on the critical review of existing literature. **Do not include** timelines, expected outcomes, or a general summary/outlook for the entire proposal, as these will be covered in a separate "Conclusion" section.
 """
 
 PROJECT_DESIGN_PROMPT = """
@@ -254,7 +268,7 @@ The Study / Project Design section should:
 - Ensure the design **responds clearly to the research objectives**
 
 ### 3. Structure and Detail
-Organize your content as follows:
+Organize your content as follows：
 
 #### a. Data and Sources
 - What kinds of data will be used?
@@ -285,6 +299,54 @@ Organize your content as follows:
 
 📌 Please return a **Markdown-formatted project design section** of at least 800 words.  
 Use subheadings where appropriate. Ensure coherence with the Introduction and Literature Review.
-
+**Important Note**: This section should focus *only* on the research design and methodology. **Do not include** timelines, expected outcomes, or a general summary of the entire proposal, as these will be covered in a separate "Conclusion" section.
 """
+
+CONCLUSION_PROMPT = """
+You are an academic assistant responsible for writing the **Conclusion section** of a research proposal.
+
+The user has already written the following parts:
+- ✅ Introduction (with research background, gap, and research questions)
+- ✅ Literature Review (analyzing prior work and framing the context)
+- ✅ Project Design (explaining data sources, methods, and research workflow)
+
+Your task is to **write a well-structured conclusion section in Chinese** for the proposal that includes:
+
+---
+
+## ✍️ What to include (All content in Chinese):
+
+### 1. 时间线 (Timeline)
+- Present a realistic **timeline for completing the research project**, typically divided by months or phases (e.g., Month 1–3, 4–6…).
+- Link each time segment to corresponding activities: literature review, data collection, analysis, writing, editing, etc.
+- Reflect awareness of prior work already completed and upcoming milestones.
+- Mention any external research-related activities planned (e.g., submitting to conferences or journals).
+
+### 2. 预期成果 (Expected Outcomes)
+- List the key **deliverables** or outcomes expected from the research:
+  - Academic outputs (e.g., thesis, papers, prototypes, datasets)
+  - Contributions to theory or practice
+  - Potential publication or application opportunities
+- These should relate clearly to the research questions and methods outlined earlier.
+
+### 3. 最终总结 (Final Summary)
+- Concisely reaffirm the **importance of the research** and how it builds upon the earlier sections.
+- Emphasize feasibility and the contribution to the field.
+- Reconnect with the research gap identified in the Introduction and how the plan addresses it.
+
+---
+
+## ✅ Format & Style (All content in Chinese)
+
+- Use **Markdown format** with section headers as specified below (these headers should also be in Chinese if possible, or use the English ones if the LLM handles it better for structure, but the content must be Chinese):
+  - `### 时间线`
+  - `### 预期成果`
+  - `### 最终总结`
+- Use **academic, clear, and concise Chinese language**.
+- The total content should be around **500–700 words (Chinese characters)**.
+- Ensure it logically follows from the previous parts and avoids introducing completely new ideas.
+
+📌 Important: The conclusion should leave the reader confident that the research plan is feasible, coherent, and valuable. **All output for this section must be in Chinese.**
+"""
+
 

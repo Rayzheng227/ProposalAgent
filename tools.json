@@ -3,24 +3,22 @@
     "type": "function",
     "function": {
       "name": "search_arxiv_papers_tool",
-      "description": "搜索并下载ArXiv论文的工具。可以根据关键词搜索最新发表的学术论文，并可选择性下载PDF到本地Papers目录。适用于文献调研和学术研究。",
+      "description": "搜索并下载ArXiv论文，支持按关键词检索最新的学术论文",
       "parameters": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "搜索关键词，可以是研究领域、技术名称、作者名等"
+            "description": "搜索关键词或主题"
           },
           "max_results": {
             "type": "integer",
-            "description": "最大搜索结果数量，默认为5篇",
-            "default": 5,
-            "minimum": 1,
-            "maximum": 20
+            "description": "最大返回结果数量",
+            "default": 5
           },
           "Download": {
             "type": "boolean",
-            "description": "是否下载PDF文件到本地Papers目录，默认为True",
+            "description": "是否下载PDF文件到本地",
             "default": true
           }
         },
@@ -32,16 +30,60 @@
     "type": "function",
     "function": {
       "name": "search_web_content_tool",
-      "description": "使用Tavily搜索引擎搜索网络内容的工具。可以获取最新的研究进展、新闻、技术文档等网络信息。适用于了解最新动态和补充学术文献。",
+      "description": "使用Tavily搜索引擎检索网络内容，获取最新的行业信息和新闻",
       "parameters": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "搜索查询内容，可以是研究问题、技术名称、公司产品等"
+            "description": "搜索查询词"
           }
         },
         "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_crossref_papers_tool",
+      "description": "使用CrossRef数据库搜索学术论文元数据，获取期刊论文信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词或主题"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "最大返回结果数量",
+            "default": 5
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "summarize_pdf",
+      "description": "总结PDF文件内容，提取关键信息和学术观点。对于重要的下载论文进行深度分析",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "PDF文件的本地路径"
+          },
+          "max_chars": {
+            "type": "integer",
+            "description": "最大处理字符数限制",
+            "default": 10000
+          }
+        },
+        "required": ["path"]
       }
     }
   }

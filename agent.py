@@ -46,7 +46,7 @@ class ProposalState(TypedDict):
     methodology: str
     timeline: str
     expected_outcomes: str
-    final_proposal: str
+    final_proposal: str # Potentially redundant, consider removing if final_report_markdown is comprehensive
     messages: List[Any]
     research_plan: str
     available_tools: List[Dict]  # 存储可用工具信息
@@ -57,28 +57,30 @@ class ProposalState(TypedDict):
     introduction: str
     literature_review: str
     research_design: str
-    timeline_plan: str
-    expected_results: str
+    timeline_plan: str # Note: This might be redundant if CONCLUSION_PROMPT handles timeline
+    expected_results: str # Note: This might be redundant if CONCLUSION_PROMPT handles expected outcomes
     reference_list: List[Dict]  # 统一的参考文献列表
     ref_counter: int  # 参考文献计数器
     final_references: str  # 最终的参考文献部分
-
-
+    conclusion: str # 新增结论字段
+    final_report_markdown: str # 新增最终报告Markdown内容字段
 
 
 @tool
-def search_arxiv_papers_tool(query: str, max_results: int = 5, Download = True) -> List[Dict]:
+def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool = True) -> List[Dict]:
     """搜索并下载ArXiv论文的工具
     
     Args:
         query: 搜索关键词
         max_results: 最大结果数量，默认5篇
+        Download: 是否下载PDF文件
     
     Returns:
         包含论文信息的字典列表
         以及存储在Papers目录下的参考文献
     """
-
+    logging.info(f"在arxiv上搜索:{query}")
+    
     try:
         client = arxiv.Client()
         search = arxiv.Search(
@@ -102,29 +104,75 @@ def search_arxiv_papers_tool(query: str, max_results: int = 5, Download = True) 
                 "categories": paper.categories,
                 "arxiv_id": paper.entry_id.split('/')[-1]
             }
+            
             if Download:
                 try:
-                    # 下载PDF
-                    safe_title = "".join(c for c in paper.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                    safe_title = safe_title[:50]
+                    # 下载PDF - 改进文件名处理和错误处理
+                    logging.info(f"正在下载论文：{paper.title[:50]}...")
+                    
+                    # 更安全的文件名处理
+                    import re
+                    safe_title = re.sub(r'[^\w\s-]', '', paper.title)  # 移除特殊字符
+                    safe_title = re.sub(r'[-\s]+', '-', safe_title)    # 替换空格和多个连字符
+                    safe_title = safe_title.strip('-')[:40]             # 限制长度并移除首尾连字符
+                    
+                    if not safe_title:  # 如果标题处理后为空，使用默认名称
+                        safe_title = "paper"
+                    
                     filename = f"{paper_info['arxiv_id']}_{safe_title}.pdf"
+                    full_path = os.path.join(papers_dir, filename)
                     
-                    paper.download_pdf(dirpath=papers_dir, filename=filename)
-                    paper_info["local_pdf_path"] = os.path.join(papers_dir, filename)
-                    
+                    # 检查文件是否已存在
+                    if os.path.exists(full_path):
+                        logging.info(f"论文已存在，跳过下载: {filename}")
+                        paper_info["local_pdf_path"] = full_path
+                    else:
+                        # 使用更稳定的下载方法
+                        import time
+                        time.sleep(5)  # 增加下载间隔时间，例如5秒，以减少服务器压力
+                        
+                        paper.download_pdf(dirpath=papers_dir, filename=filename)
+                        
+                        # 验证下载是否成功
+                        if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+                            paper_info["local_pdf_path"] = full_path
+                            logging.info(f"✅ 成功下载: {filename}")
+                        else:
+                            paper_info["local_pdf_path"] = None
+                            logging.warning(f"❌ 下载失败或文件为空: {filename}")
+                        
                 except Exception as e:
                     paper_info["local_pdf_path"] = None
-                
+                    logging.warning(f"❌ 下载论文失败: {paper.title[:50]}... - 错误: {str(e)}")
+                    
+                    # 如果下载失败，尝试记录更详细的错误信息
+                    error_str = str(e).lower()
+                    if "timeout" in error_str:
+                        logging.warning("可能的网络超时问题。")
+                    elif "permission" in error_str or "403" in error_str or "forbidden" in error_str:
+                        logging.warning("可能的权限问题或请求被禁止 (403 Forbidden)。这可能是由于请求频率过高。")
+                    elif "not found" in error_str or "404" in error_str:
+                        logging.warning("PDF文件可能不存在 (404 Not Found)。")
+                    elif "bad gateway" in error_str or "502" in error_str:
+                        logging.warning("服务器端错误 (502 Bad Gateway)。这可能是ArXiv服务器的临时问题。")
+            
             papers.append(paper_info)
+            
+            # 限制处理数量，避免过多请求
+            if len(papers) >= max_results:
+                break
+
+        logging.info(f"✅ ArXiv搜索完成，共找到 {len(papers)} 篇论文")
+        successful_downloads = len([p for p in papers if p.get("local_pdf_path")])
+        logging.info(f"📄 成功下载 {successful_downloads} 个PDF文件")
         
         return papers
-    
+
     except Exception as e:
+        logging.error(f"❌ ArXiv搜索失败: {str(e)}")
         return [{"error": f"ArXiv搜索失败: {str(e)}"}]
-    
 
 
-# 定义网络搜索工具
 @tool
 def search_web_content_tool(query: str) -> List[Dict]:
     """使用Tavily搜索网络内容的工具
@@ -135,6 +183,8 @@ def search_web_content_tool(query: str) -> List[Dict]:
     Returns:
         搜索结果列表
     """
+    logging.info(f"正在网络搜索:{query}")
+    
     try:
         os.environ["TAVILY_API_KEY"] = Tavily_API_KEY
         tavily_tool = TavilySearchResults(
@@ -149,12 +199,11 @@ def search_web_content_tool(query: str) -> List[Dict]:
     
     except Exception as e:
         return [{"error": f"网络搜索失败: {str(e)}"}]
-    
+
 
 @tool
 def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
-    """
-    使用 CrossRef 搜索论文元数据的工具
+    """使用 CrossRef 搜索论文元数据的工具
 
     Args:
         query: 关键词或主题
@@ -163,6 +212,8 @@ def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
     Returns:
         包含论文信息的字典列表
     """
+    logging.info(f"在crossref上搜索:{query}")
+    
     try:
         works = Works()
         search = works.query(query).sort('relevance')
@@ -194,17 +245,18 @@ def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
 
 
 @tool
-def summarize_pdf(path: str, max_chars: int = 3000) -> Dict:
-    """
-    从 PDF 中提取文本并生成摘要。
-
+def summarize_pdf(path: str, max_chars: int = 10000) -> Dict:
+    """总结PDF文件内容的工具
+    
     Args:
-        path: PDF 文件的路径
-        max_chars: 提取的最大字符数（避免超长输入，默认 3000）
-
+        path: PDF文件路径
+        max_chars: 最大字符数限制，默认10000
+        
     Returns:
-        包含原始文本片段和生成摘要的字典
+        包含摘要和源文本片段的字典
     """
+    logging.info(f"调用工具：summarize_pdf:{path}")
+    
     try:
         # 1. 打开并提取 PDF 文本
         doc = fitz.open(path)
@@ -218,13 +270,20 @@ def summarize_pdf(path: str, max_chars: int = 3000) -> Dict:
         doc.close()
 
         if not full_text.strip():
+            logging.warning(f"PDF 文件 '{path}' 中未找到可用文本")
             return {"error": "PDF 文件中未找到可用文本"}
 
         # 2. 构造摘要提示
         prompt = f"""
-        You are an academic assistant.
-        Summarize the following academic text into a concise paragraph (around 150-200 words).
-        Focus on key contributions, methodology, and findings if identifiable.
+        You are an academic assistant specializing in research paper analysis.
+        Summarize the following academic text into a comprehensive but concise analysis (around 300-400 words in Chinese).
+        Focus on:
+        1. 研究目标和问题
+        2. 主要方法论
+        3. 核心发现和结论
+        4. 研究贡献和意义
+        
+        请用中文回答，使用学术化的语言。
 
         Text:
         \"\"\"
@@ -232,19 +291,27 @@ def summarize_pdf(path: str, max_chars: int = 3000) -> Dict:
         \"\"\"
         """
 
-        # 3. 调用语言模型（你可根据使用的 LLM 接口替换）
-        from langchain.chat_models import ChatOpenAI
-        llm = ChatOpenAI(temperature=0, model="qwen-plus", base_url=base_url, api_key=DASHSCOPE_API_KEY)
+        # 3. 调用语言模型
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            temperature=0, 
+            model="qwen-plus", 
+            base_url=base_url, 
+            api_key=DASHSCOPE_API_KEY
+        )
 
-        response = llm.invoke(prompt)
-
+        logging.info(f"正在为PDF文件 '{path}' 生成摘要...")
+        response = llm.invoke([HumanMessage(content=prompt)])
+        logging.info(f"摘要: {response.content.strip()}")
         return {
             "summary": response.content.strip(),
-            "source_excerpt": full_text[:500] + "..."  # 返回前 500 字用于上下文参考
+            "source_excerpt": full_text[:500] + "...",  # 返回前 500 字用于上下文参考
+            "total_length": len(full_text)
         }
 
     except Exception as e:
         return {"error": f"PDF 摘要失败: {str(e)}"}
+
 
 class ProposalAgent:
     def __init__(self):
@@ -259,7 +326,7 @@ class ProposalAgent:
         # 设置Tavily API密钥
         os.environ["TAVILY_API_KEY"] = Tavily_API_KEY
 
-        self.tools = [search_arxiv_papers_tool, search_web_content_tool]
+        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
         self.workflow = self._build_workflow()
@@ -431,6 +498,41 @@ class ProposalAgent:
                 # 将结果保存到状态中
                 if isinstance(result, list) and len(result) > 0:
                     state["web_search_results"].extend(result)
+                    
+            elif action_name == "search_crossref_papers":
+                result = search_crossref_papers_tool.invoke(parameters)
+                # 将结果保存到状态中
+                if isinstance(result, list) and len(result) > 0:
+                    state["web_search_results"].extend(result)
+                    
+            elif action_name == "summarize_pdf":
+                # 改进PDF摘要的路径处理
+                pdf_path = parameters.get("path", "")
+                
+                # 如果没有指定具体路径，尝试找到已下载的PDF
+                if not pdf_path or not os.path.exists(pdf_path):
+                    # 查找已下载的PDF文件
+                    available_pdfs = []
+                    for paper in state.get("arxiv_papers", []):
+                        if paper.get("local_pdf_path") and os.path.exists(paper["local_pdf_path"]):
+                            available_pdfs.append(paper["local_pdf_path"])
+                    
+                    if available_pdfs:
+                        pdf_path = available_pdfs[0]  # 使用第一个可用的PDF
+                        logging.info(f"📄 使用可用的PDF文件: {pdf_path}")
+                    else:
+                        logging.warning("❌ 没有找到可用的PDF文件进行摘要")
+                        result = {"error": "没有找到可用的PDF文件"}
+                
+                if pdf_path and os.path.exists(pdf_path):
+                    result = summarize_pdf.invoke({"path": pdf_path})
+                    # PDF摘要结果可以存储到执行记录中，或者添加到论文信息中
+                    if result and "error" not in result:
+                        # 将摘要添加到对应的论文信息中
+                        for paper in state["arxiv_papers"]:
+                            if paper.get("local_pdf_path") == pdf_path:
+                                paper["detailed_summary"] = result["summary"]
+                                break
             
             # 每次收集到新数据后，立即更新参考文献列表
             state = self.add_references_from_data(state)
@@ -482,24 +584,37 @@ class ProposalAgent:
                         "published": paper.get('published', 'Unknown'),
                         "arxiv_id": paper.get('arxiv_id', ''),
                         "categories": paper.get('categories', []),
-                        "summary": paper.get('summary', '')
+                        "summary": paper.get('detailed_summary', paper.get('summary', ''))  # 优先使用详细摘要
                     })
                     ref_counter += 1
         
-        # 处理网络搜索结果
+        # 处理网络搜索结果和CrossRef结果
         for result in web_results:
             if "error" not in result:
                 result_title = result.get('title', result.get('url', 'Unknown'))
                 existing_ref = next((ref for ref in reference_list if ref.get('title') == result_title), None)
                 
                 if not existing_ref:
-                    reference_list.append({
-                        "id": ref_counter,
-                        "type": "Web",
-                        "title": result_title,
-                        "url": result.get('url', ''),
-                        "content_preview": result.get('content', result.get('snippet', 'No content'))[:200]
-                    })
+                    # 区分CrossRef和普通Web结果
+                    if result.get('doi'):  # CrossRef结果
+                        reference_list.append({
+                            "id": ref_counter,
+                            "type": "CrossRef",
+                            "title": result_title,
+                            "authors": result.get('authors', []),
+                            "doi": result.get('doi', ''),
+                            "journal": result.get('journal', ''),
+                            "published": result.get('published', ''),
+                            "url": result.get('url', '')
+                        })
+                    else:  # 普通Web结果
+                        reference_list.append({
+                            "id": ref_counter,
+                            "type": "Web",
+                            "title": result_title,
+                            "url": result.get('url', ''),
+                            "content_preview": result.get('content', result.get('snippet', 'No content'))[:200]
+                        })
                     ref_counter += 1
         
         state["reference_list"] = reference_list
@@ -553,6 +668,10 @@ class ProposalAgent:
                 if categories_str:
                     ref_text += f". Categories: {categories_str}"
                 ref_text += "\n\n"
+            elif ref["type"] == "CrossRef":
+                # CrossRef论文格式
+                authors_str = ", ".join(ref["authors"]) if ref["authors"] else "未知作者"
+                ref_text += f"[{ref['id']}] {authors_str}. {ref['title']}. {ref['journal']} ({ref['published']}). DOI: {ref['doi']}\n\n"
             elif ref["type"] == "Web":
                 # 网络资源格式
                 ref_text += f"[{ref['id']}] {ref['title']}. 访问时间: {datetime.now().strftime('%Y-%m-%d')}. URL: {ref['url']}\n\n"
@@ -598,6 +717,7 @@ class ProposalAgent:
         4. 适当引用已收集的文献，使用上述编号系统
         5. 语言学术化，适合研究计划书
         6. **不要在引言部分包含参考文献列表**，只在正文中使用引用标记
+        7. 使用`# 引言`作为开头
         """
         
         logging.info("📝 正在生成研究计划书引言部分...")
@@ -722,7 +842,7 @@ class ProposalAgent:
         
         **研究主题：** {research_field}
         
-        **研究计划：**
+        **研究计划概要：**
         {research_plan}
         
         **已完成的引言部分：**
@@ -731,26 +851,17 @@ class ProposalAgent:
         **已完成的文献综述部分：**
         {literature_review_content}
         
-        **已收集的文献和信息：**
+        **已收集的文献和信息（用于可能的引用）：**
         {literature_summary}
         
         {citation_instruction}
         
         {coherence_instruction}
         
-        请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的研究设计部分。
-        
-        要求：
-        1. 必须使用中文撰写
-        2. 至少800字
-        3. 结构清晰，包含数据来源、研究方法、分析策略、工作流程等
-        4. 明确回应引言中提出的研究问题
-        5. 基于文献综述中的方法论分析，选择合适的研究方法
-        6. 必须包含适当的文献引用，使用统一编号系统
-        7. 语言学术化，适合研究计划书
-        8. **与引言和文献综述保持逻辑连贯性**
-        9. 使用承接性语言连接前文内容
-        10. 说明研究设计的可行性和局限性
+        请基于以上信息，按照instruction的要求，为“{research_field}”这个研究主题撰写一个学术规范的研究设计部分。
+        重点关注研究数据、方法、工作流程和局限性。
+        必须**使用中文撰写**
+        **不要包含时间安排或预期成果总结，这些将在结论部分统一阐述。**
         """
         
         logging.info("🔬 正在生成研究计划书研究设计部分...")
@@ -761,6 +872,43 @@ class ProposalAgent:
         
         return state
 
+
+    def write_conclusion_node(self, state: ProposalState) -> ProposalState:
+        """生成研究计划书的结论部分"""
+        research_field = state["research_field"]
+        introduction_content = state.get("introduction", "")
+        literature_review_content = state.get("literature_review", "")
+        research_design_content = state.get("research_design", "")
+        
+        conclusion_prompt_text = f"""
+        {CONCLUSION_PROMPT.format(research_field=research_field)}
+
+        **研究主题：** {research_field}
+
+        **已完成的引言部分摘要（用于回顾研究问题和背景）：**
+        {introduction_content[:1000]}... 
+
+        **已完成的文献综述部分摘要（用于回顾理论框架）：**
+        {literature_review_content[:1000]}...
+
+        **已完成的研究设计部分摘要（用于回顾方法和流程）：**
+        {research_design_content[:1000]}...
+
+        请基于以上提供的引言、文献综述和研究设计内容，撰写一个连贯的结论部分。
+        结论应包含时间轴、预期成果和最终总结。
+        确保结论与前面章节提出的研究问题、方法论和目标保持一致。
+        必须使用**中文**撰写
+        """
+        
+        logging.info("📜 正在生成研究计划书结论部分...")
+        response = self.llm.invoke([HumanMessage(content=conclusion_prompt_text)])
+        
+        state["conclusion"] = response.content
+        logging.info("✅ 结论部分生成完成")
+        
+        return state
+
+
     def generate_final_references_node(self, state: ProposalState) -> ProposalState:
         """生成最终的参考文献部分"""
         reference_section = self.generate_reference_section(state)
@@ -769,6 +917,83 @@ class ProposalAgent:
         state["final_references"] = reference_section
         logging.info("✅ 参考文献部分生成完成")
         
+        return state
+
+    def generate_final_report_node(self, state: ProposalState) -> ProposalState:
+        """生成最终的Markdown研究计划书报告"""
+        logging.info("📄 正在生成最终的研究计划书Markdown报告...")
+        
+        research_field = state.get("research_field", "未知领域")
+        introduction = state.get("introduction", "无引言内容")
+        literature_review = state.get("literature_review", "无文献综述内容")
+        research_design = state.get("research_design", "无研究设计内容")
+        conclusion = state.get("conclusion", "无结论内容")
+        final_references = state.get("final_references", "无参考文献")
+        
+        research_plan = state.get("research_plan", "无初始研究计划")
+        execution_memory = state.get("execution_memory", [])
+        
+        # 创建output文件夹
+        output_dir = "./output"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            
+        # 文件名包含时间戳
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_research_field = "".join(c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
+        report_filename = f"Research_Proposal_{safe_research_field}_{timestamp}.md"
+        report_filepath = os.path.join(output_dir, report_filename)
+        
+        # 构建Markdown内容
+        report_content = f"# 研究计划书：{research_field}\n\n"
+        
+        # report_content += "## 1. 引言\n\n"
+        report_content += f"{introduction}\n\n"
+        
+        # report_content += "## 2. 文献综述\n\n"
+        report_content += f"{literature_review}\n\n"
+        
+        # report_content += "## 3. 研究设计与方法\n\n"
+        report_content += f"{research_design}\n\n"
+        
+        # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
+        report_content += f"{conclusion}\n\n"
+        
+        report_content += f"{final_references}\n\n" # 参考文献部分自带 "## 参考文献" 标题
+        
+        report_content += "---\n"
+        report_content += "## 附录：过程资料\n\n"
+        
+        report_content += "### A.1 初始研究计划\n\n"
+        report_content += "```markdown\n"
+        report_content += f"{research_plan}\n"
+        report_content += "```\n\n"
+        
+        report_content += "### A.2 执行步骤记录\n\n"
+        if execution_memory:
+            for i, step_memory in enumerate(execution_memory):
+                action = step_memory.get("action", "未知动作")
+                desc = step_memory.get("description", "无描述")
+                res = step_memory.get("result", "无结果")
+                success_status = "成功" if step_memory.get("success") else "失败"
+                report_content += f"**步骤 {i+1}: {desc}** ({action})\n"
+                report_content += f"- 状态: {success_status}\n"
+                report_content += f"- 结果摘要: {str(res)[:150]}...\n\n"
+        else:
+            report_content += "无执行记录。\n\n"
+            
+        report_content += "### A.3 收集的文献与信息摘要\n\n"
+        report_content += self.get_literature_summary_with_refs(state) + "\n\n"
+
+        try:
+            with open(report_filepath, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+            logging.info(f"✅ 最终报告已保存到: {report_filepath}")
+            state["final_report_markdown"] = report_content
+        except Exception as e:
+            logging.error(f"❌ 保存最终报告失败: {e}")
+            state["final_report_markdown"] = "报告生成失败"
+            
         return state
 
     def should_continue(self, state: ProposalState) -> str:
@@ -830,7 +1055,9 @@ class ProposalAgent:
         workflow.add_node("write_introduction", self.write_introduction_node)
         workflow.add_node("write_literature_review", self.write_literature_review_node)
         workflow.add_node("write_research_design", self.write_research_design_node)
+        workflow.add_node("write_conclusion", self.write_conclusion_node) 
         workflow.add_node("generate_final_references", self.generate_final_references_node)
+        workflow.add_node("generate_final_report", self.generate_final_report_node) # 新增最终报告节点
         
         # 定义流程
         workflow.set_entry_point("create_master_plan")
@@ -855,8 +1082,10 @@ class ProposalAgent:
         
         workflow.add_edge("write_introduction", "write_literature_review")
         workflow.add_edge("write_literature_review", "write_research_design")
-        workflow.add_edge("write_research_design", "generate_final_references")
-        workflow.add_edge("generate_final_references", END)
+        workflow.add_edge("write_research_design", "write_conclusion") 
+        workflow.add_edge("write_conclusion", "generate_final_references") 
+        workflow.add_edge("generate_final_references", "generate_final_report") # 参考文献后到最终报告
+        workflow.add_edge("generate_final_report", END) # 最终报告后结束
         
         return workflow.compile()
     
@@ -887,7 +1116,9 @@ class ProposalAgent:
             expected_results="",
             reference_list=[],  # 初始化统一参考文献列表
             ref_counter=1,      # 初始化参考文献计数器
-            final_references="" # 添加最终参考文献字段
+            final_references="", 
+            conclusion="",       
+            final_report_markdown="" # 初始化最终报告字段
         )
         
         logging.info(f"🚀 开始处理研究问题: '{research_field}'")
@@ -901,17 +1132,12 @@ TODO: 已完成简单的搜索功能等内容
 """
 
 if __name__ == "__main__":
-    query = "transformer neural network"
-    results = search_crossref_papers_tool.invoke({
-    "query": query,
-    "max_results": 3
-})
-
-    print(results)
-    import sys
-    sys.exit(0)
+    # 测试PDF摘要功能
+    # pdf_result = summarize_pdf.invoke({"path": "./Papers/test.pdf"})
+    # print("PDF摘要测试:", pdf_result)
+    
     agent = ProposalAgent()
-    research_question = "人工智能在抑郁症领域的应用"
+    research_question = "RAG与推理技术的结合"
     result = agent.generate_proposal(research_question)
     print("\n" + "="*60)
     # print("计划:")
@@ -925,14 +1151,34 @@ if __name__ == "__main__":
     print(f"网络搜索结果: {len(result['web_search_results'])} 条")
     print(f"统一参考文献: {len(result['reference_list'])} 条")
     print("\n" + "="*60)
-    print("引言部分:")
-    print(result["introduction"])
-    print("\n" + "="*60)
-    print("文献综述部分:")
-    print(result["literature_review"])
-    print("\n" + "="*60)
-    print("研究设计部分:")
-    print(result["research_design"])
-    print("\n" + "="*60)
-    print("参考文献部分:")
-    print(result["final_references"])
+    # print("引言部分:")
+    # print(result["introduction"])
+    # print("\n" + "="*60)
+    # print("文献综述部分:")
+    # print(result["literature_review"])
+    # print("\n" + "="*60)
+    # print("研究设计部分:")
+    # print(result["research_design"])
+    # print("\n" + "="*60)
+    # print("结论部分:") 
+    # print(result["conclusion"])
+    # print("\n" + "="*60)
+    # print("参考文献部分:")
+    # print(result["final_references"])
+
+    # 输出最终报告的保存路径或内容
+    if result.get("final_report_markdown") and result["final_report_markdown"] != "报告生成失败":
+        # 查找报告文件名，因为路径是在函数内部生成的
+        output_dir = "./output"
+        if os.path.exists(output_dir):
+            files = sorted(os.listdir(output_dir), key=lambda x: os.path.getmtime(os.path.join(output_dir, x)), reverse=True)
+            if files:
+                latest_report = os.path.join(output_dir, files[0])
+                print(f"✅ 最终研究计划书已生成并保存到: {latest_report}")
+            else:
+                print("✅ 最终研究计划书内容已生成，但未找到具体文件路径。")
+        else:
+             print("✅ 最终研究计划书内容已生成。")
+        # print("\n报告内容预览:\n", result["final_report_markdown"][:1000] + "...") # 可以选择性打印部分内容
+    else:
+        print("❌ 未能生成最终研究计划书报告。")
