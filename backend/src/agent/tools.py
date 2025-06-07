@@ -1,6 +1,7 @@
 """
 过程中涉及到的一些工具，工具相关配置见:tools.json
 """
+from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError as FuturesTimeoutError
 import arxiv
 from langchain_core.tools import tool
 import logging
@@ -139,7 +140,7 @@ def search_web_content_tool(query: str) -> List[Dict]:
     logging.info(f"正在网络搜索:{query}")
     
     try:
-        os.environ["TAVILY_API_KEY"] = Tavily_API_KEY
+        os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
         tavily_tool = TavilySearchResults(
             max_results=5,
             search_depth="advanced",
