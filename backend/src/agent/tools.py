@@ -139,7 +139,7 @@ def search_web_content_tool(query: str) -> List[Dict]:
     logging.info(f"正在网络搜索:{query}")
     
     try:
-        os.environ["TAVILY_API_KEY"] = Tavily_API_KEY
+        os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
         tavily_tool = TavilySearchResults(
             max_results=5,
             search_depth="advanced",

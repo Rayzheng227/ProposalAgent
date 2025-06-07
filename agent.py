@@ -16,7 +16,7 @@ if __name__ == "__main__":
     # print("PDF摘要测试:", pdf_result)
     
     agent = ProposalAgent()
-    research_question = "大模型的推理优化"
+    research_question = input("请输入研究问题（Research Question）：")
     result = agent.generate_proposal(research_question)
     print("\n" + "="*60)
     # print("计划:")
