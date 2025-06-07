@@ -12,6 +12,7 @@ from crossref.restful import Works
 from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
 from langchain_openai import ChatOpenAI
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 
 load_dotenv()

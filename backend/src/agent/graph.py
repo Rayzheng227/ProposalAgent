@@ -15,13 +15,11 @@ import json
 import os
 from datetime import datetime
 import logging
-from backend.src.agent.prompts import *
+from backend.src.agent.prompts import * # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool,search_crossref_papers_tool,search_web_content_tool,summarize_pdf
 from .state import ProposalState
-
-
 
 
 load_dotenv()
@@ -53,7 +51,7 @@ class ProposalAgent:
         self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
-        self.workflow = self._build_workflow()
+        self.workflow = self._build_workflow() # _build_workflow is called here
 
     
     def load_tools_description(self) -> List[Dict]:
@@ -102,30 +100,105 @@ class ProposalAgent:
         return tools_text
     
 
+    def clarify_research_focus_node(self, state: ProposalState) -> ProposalState:
+        """根据研究领域生成澄清问题，或处理用户提供的澄清信息"""
+        research_field = state["research_field"]
+        user_clarifications = state.get("user_clarifications", "")
+        existing_questions = state.get("clarification_questions", [])
+
+        if user_clarifications:
+            logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
+            # 用户已提供澄清，无需再生成问题
+            state["clarification_questions"] = [] # 清空旧问题（如果有）
+            return state
+        
+        if existing_questions:
+            logging.info("📝 已存在澄清问题，等待用户回应。")
+            # 如果已有问题但无用户回应，则不重复生成
+            return state
+
+        logging.info(f"🤔 正在为研究领域 '{research_field}' 生成澄清性问题...")
+        
+        prompt = CLARIFICATION_QUESTION_PROMPT.format(research_field=research_field)
+        response = self.llm.invoke([HumanMessage(content=prompt)])
+        
+        generated_questions_text = response.content.strip()
+        questions = [q.strip() for q in generated_questions_text.split('\n') if q.strip()]
+        
+        if questions:
+            state["clarification_questions"] = questions
+            logging.info("✅ 成功生成澄清性问题：")
+            for i, q in enumerate(questions):
+                logging.info(f"  {i+1}. {q}")
+            logging.info("📢 请用户针对以上问题提供回应，并在下次请求时通过 'user_clarifications' 字段传入。")
+        else:
+            logging.warning("⚠️ 未能从LLM响应中解析出澄清性问题。")
+            state["clarification_questions"] = []
+            
+        return state
+
     def create_master_plan_node(self, state: ProposalState) -> ProposalState:
         """首先基于问题去创建一个总体的规划(不同于Proposal)"""
-        research_field = state["research_field"]
-
+        research_field_original = state["research_field"]
+        user_clarifications = state.get("user_clarifications", "")
         tools_info = self.get_tools_info_text()
 
-        master_planning_prompt = master_plan_instruction.format(
-            research_field=research_field,
+        clarification_text_for_prompt = ""
+        if user_clarifications:
+            clarification_text_for_prompt = (
+                f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
+                f"{user_clarifications}\n"
+            )
+            logging.info("📝 正在使用用户提供的澄清信息来指导总体规划。")
+
+        # 修改 master_plan_instruction 提示字符串
+        # 目标插入位置：在 "Research Field: {research_field}" 行之后
+        # 以及 "Available Tools:" 之前
+        
+        base_prompt_template = master_plan_instruction # 从 prompts.py 导入
+
+        lines = base_prompt_template.splitlines()
+        new_lines = []
+        inserted = False
+        for line in lines:
+            new_lines.append(line)
+            if "{research_field}" in line and clarification_text_for_prompt:
+                # 在包含 {research_field} 的行之后插入澄清信息
+                new_lines.append(clarification_text_for_prompt)
+                inserted = True
+        
+        if not inserted and clarification_text_for_prompt: # 后备：如果占位符未找到，则追加
+            new_lines.append(clarification_text_for_prompt)
+            
+        modified_master_plan_prompt_template = "\n".join(new_lines)
+        
+        master_planning_prompt = modified_master_plan_prompt_template.format(
+            research_field=research_field_original, # 此处使用原始研究领域
             tools_info=tools_info
         )
-        logging.info(f"🤖 Agent正在为 '{research_field}' 制定总体研究计划...")
+
+        logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清) 制定总体研究计划...")
         response = self.llm.invoke([HumanMessage(content=master_planning_prompt)])
         
         state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
         state["execution_memory"] = []
         state["current_step"] = 0
-        state["max_iterations"] = 10
+        state["max_iterations"] = 10 # 可以考虑调整，因为澄清步骤可能消耗一次迭代的意图
 
         logging.info("✅ 总体研究计划制定完成")
-        logging.info(f"研究计划内容: {state['research_plan']}...")
+        logging.info(f"研究计划内容 (部分): {state['research_plan'][:300]}...")
 
         return state
     
+    # Ensure this method is correctly indented as part of the ProposalAgent class
+    def _decide_after_clarification(self, state: ProposalState) -> str:
+        """Determines the next step after the clarification node."""
+        if state.get("clarification_questions") and not state.get("user_clarifications"):
+            logging.info("❓ Clarification questions generated. Waiting for user input.")
+            return "end_for_user_input" 
+        logging.info("✅ No clarification needed or clarifications provided. Proceeding to master plan.")
+        return "proceed_to_master_plan"
 
 
     def plan_analysis_node(self, state: ProposalState) -> ProposalState:
@@ -724,6 +797,22 @@ class ProposalAgent:
 
     def should_continue(self, state: ProposalState) -> str:
         """决定是否继续执行或进入写作阶段"""
+        # 新增：如果刚生成了澄清问题且用户尚未回应，则应提示用户回应
+        if state.get("clarification_questions") and not state.get("user_clarifications"):
+            # 在实践中，图应该在此处暂停或结束，等待用户输入。
+            # 对于当前单次调用模型，我们将允许其继续，但总体规划会受影响。
+            # 或者，可以设计一个特殊的结束状态，提示需要用户输入。
+            # 为简单起见，我们让它继续，但总体规划可能不够聚焦。
+            # 一个更好的方法是，如果clarification_questions存在，则在此处返回一个特殊信号
+            # 让调用者知道需要用户输入。但当前langgraph的should_continue通常用于工具执行循环。
+            # logging.info("⏳ 等待用户对澄清问题的回应。继续当前流程，但建议提供澄清以获得更佳结果。")
+            # 如果澄清问题已生成但用户未提供澄清，则不应直接进入工具执行或写作
+            # 理想情况下，这里应该有一个分支逻辑，如果澄清问题存在且无答案，则图应该结束并返回问题
+            # 但由于 `should_continue` 主要控制工具执行循环，我们将允许它进入plan_analysis
+            # plan_analysis 和 master_plan 会基于有无澄清信息来调整行为
+            pass
+
+
         current_step = state.get("current_step", 0)
         execution_plan = state.get("execution_plan", [])
         execution_memory = state.get("execution_memory", [])
@@ -770,11 +859,12 @@ class ProposalAgent:
     
     
     
-    def _build_workflow(self) -> StateGraph:
+    def _build_workflow(self) -> StateGraph: # This method uses _decide_after_clarification
         """构建工作流图"""
         workflow = StateGraph(ProposalState)
         
         # 添加节点
+        workflow.add_node("clarify_research_focus", self.clarify_research_focus_node) 
         workflow.add_node("create_master_plan", self.create_master_plan_node)
         workflow.add_node("plan_analysis", self.plan_analysis_node)
         workflow.add_node("execute_step", self.execute_step_node)
@@ -783,25 +873,36 @@ class ProposalAgent:
         workflow.add_node("write_research_design", self.write_research_design_node)
         workflow.add_node("write_conclusion", self.write_conclusion_node) 
         workflow.add_node("generate_final_references", self.generate_final_references_node)
-        workflow.add_node("generate_final_report", self.generate_final_report_node) # 新增最终报告节点
+        workflow.add_node("generate_final_report", self.generate_final_report_node) 
         
         # 定义流程
-        workflow.set_entry_point("create_master_plan")
+        workflow.set_entry_point("clarify_research_focus") 
+        
+        # Conditional edge after clarification
+        workflow.add_conditional_edges(
+            "clarify_research_focus",
+            self._decide_after_clarification, # This is where the method is called
+            {
+                "end_for_user_input": END, 
+                "proceed_to_master_plan": "create_master_plan"
+            }
+        )
+        
         workflow.add_edge("create_master_plan", "plan_analysis")
         
         # 条件边：根据执行情况决定下一步
         workflow.add_conditional_edges(
             "plan_analysis",
-            lambda state: "execute_step",  # 生成计划后执行步骤
+            lambda state: "execute_step",  
             {"execute_step": "execute_step"}
         )
         
         workflow.add_conditional_edges(
             "execute_step",
-            self.should_continue,  # 根据执行结果决定下一步
+            self.should_continue,  
             {
-                "execute_step": "execute_step",  # 继续执行下一步
-                "plan_analysis": "plan_analysis",  # 重新规划
+                "execute_step": "execute_step",  
+                "plan_analysis": "plan_analysis",  
                 "write_introduction": "write_introduction" 
             }
         )
@@ -810,16 +911,18 @@ class ProposalAgent:
         workflow.add_edge("write_literature_review", "write_research_design")
         workflow.add_edge("write_research_design", "write_conclusion") 
         workflow.add_edge("write_conclusion", "generate_final_references") 
-        workflow.add_edge("generate_final_references", "generate_final_report") # 参考文献后到最终报告
-        workflow.add_edge("generate_final_report", END) # 最终报告后结束
+        workflow.add_edge("generate_final_references", "generate_final_report") 
+        workflow.add_edge("generate_final_report", END) 
         
         return workflow.compile() 
     
 
-    def generate_proposal(self, research_field: str) -> Dict[str, Any]:
+    def generate_proposal(self, research_field: str, user_clarifications: str = "") -> Dict[str, Any]:
         """生成研究计划书"""
         initial_state = ProposalState(
             research_field=research_field,
+            user_clarifications=user_clarifications, # 新增：接收用户澄清
+            clarification_questions=[], # 新增：初始化澄清问题列表
             query="",
             arxiv_papers=[],
             web_search_results=[],

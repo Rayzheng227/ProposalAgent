@@ -349,4 +349,21 @@ Your task is to **write a well-structured conclusion section in Chinese** for th
 📌 Important: The conclusion should leave the reader confident that the research plan is feasible, coherent, and valuable. **All output for this section must be in Chinese.**
 """
 
+# 新增：用于生成澄清问题的Prompt (从graph.py移动过来)
+CLARIFICATION_QUESTION_PROMPT = """
+You are an AI assistant helping a user refine their research topic.
+The user has proposed the research area: "{research_field}"
+
+To ensure the research proposal is precisely focused and meets the user's specific interests, please generate 2-3 clarification questions regarding this research area.
+These questions should help narrow down the research scope or identify key aspects the user might want to emphasize.
+
+For example, if the research area is "Stock Dynamic Portfolio Optimization based on Investor Sentiment and BiLSTM," clarification questions could be:
+1.  Regarding investor sentiment, do you want to focus on the construction of sentiment indicators (e.g., based on text, questionnaires, web舆情), or on its role in market prediction or portfolio optimization?
+2.  In the application of BiLSTM, is your emphasis on model structure improvement, training optimization, or the integration method with the investment portfolio?
+3.  Is your research more inclined towards theoretical model construction and validation, empirical analysis, or application research for a specific market (e.g., A-shares, US stocks)?
+
+Please provide these questions in a clear, itemized list, one question per item. Output only the list of questions directly, without any additional explanation.
+The questions should be in Chinese.
+"""
+
 
