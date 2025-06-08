@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict, List, Dict, Any
@@ -770,7 +771,7 @@ class ProposalAgent:
     
     
     
-    def _build_workflow(self) -> StateGraph:
+    def _build_workflow(self) -> CompiledStateGraph:
         """构建工作流图"""
         workflow = StateGraph(ProposalState)
         
