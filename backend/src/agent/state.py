@@ -32,5 +32,6 @@ class ProposalState(TypedDict):
     final_references: str  # 最终的参考文献部分
     conclusion: str # 新增结论字段
     final_report_markdown: str # 新增最终报告Markdown内容字段
+    proposal_id: str #唯一标识生成的md
     clarification_questions: List[str] # 新增：代理生成的澄清问题
     user_clarifications: str # 新增：用户对澄清问题的回答

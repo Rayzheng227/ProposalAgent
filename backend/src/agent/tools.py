@@ -1,6 +1,7 @@
 """
 过程中涉及到的一些工具，工具相关配置见:tools.json
 """
+from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError as FuturesTimeoutError
 import arxiv
 from langchain_core.tools import tool
 import logging
@@ -12,8 +13,8 @@ from crossref.restful import Works
 from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
 from langchain_openai import ChatOpenAI
+import backend.src.agent.rag as rag
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
@@ -23,103 +24,112 @@ base_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/
 @tool
 def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool = True) -> List[Dict]:
     """搜索并下载ArXiv论文的工具
-    
+
     Args:
         query: 搜索关键词
         max_results: 最大结果数量，默认5篇
         Download: 是否下载PDF文件
-    
+
     Returns:
         包含论文信息的字典列表
         以及存储在Papers目录下的参考文献
     """
-    logging.info(f"在arxiv上搜索:{query}")
-    
+    logging.info(f"在arxiv上搜索领域为:{query}")
+
     try:
-        client = arxiv.Client()
-        search = arxiv.Search(
-            query=query,
-            max_results=max_results,
-            sort_by=arxiv.SortCriterion.SubmittedDate
-        )
-        
-        papers_dir = "./Papers"
-        if not os.path.exists(papers_dir):
-            os.makedirs(papers_dir)
-        
+        content = rag.generate_search_queries(query)
+        queries = [line.strip() for line in content.split('\n') if line.strip()]
+        logging.info(f"在arxiv上搜索关键词为:{queries}")
         papers = []
-        for paper in client.results(search):
-            paper_info = {
-                "title": paper.title,
-                "authors": [author.name for author in paper.authors],
-                "summary": paper.summary[:300] + "...",  # 截断摘要
-                "published": paper.published.strftime("%Y-%m-%d"),
-                "pdf_url": paper.pdf_url,
-                "categories": paper.categories,
-                "arxiv_id": paper.entry_id.split('/')[-1]
-            }
-            
-            if Download:
-                try:
-                    # 下载PDF - 改进文件名处理和错误处理
-                    logging.info(f"正在下载论文：{paper.title[:50]}...")
-                    
-                    # 更安全的文件名处理
-                    import re
-                    safe_title = re.sub(r'[^\w\s-]', '', paper.title)  # 移除特殊字符
-                    safe_title = re.sub(r'[-\s]+', '-', safe_title)    # 替换空格和多个连字符
-                    safe_title = safe_title.strip('-')[:40]             # 限制长度并移除首尾连字符
-                    
-                    if not safe_title:  # 如果标题处理后为空，使用默认名称
-                        safe_title = "paper"
-                    
-                    filename = f"{paper_info['arxiv_id']}_{safe_title}.pdf"
-                    full_path = os.path.join(papers_dir, filename)
-                    
-                    # 检查文件是否已存在
-                    if os.path.exists(full_path):
-                        logging.info(f"论文已存在，跳过下载: {filename}")
-                        paper_info["local_pdf_path"] = full_path
-                    else:
-                        # 使用更稳定的下载方法
-                        import time
-                        time.sleep(5)  # 增加下载间隔时间，例如5秒，以减少服务器压力
-                        
-                        paper.download_pdf(dirpath=papers_dir, filename=filename)
-                        
-                        # 验证下载是否成功
-                        if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+        seen_ids = set()
+        for q in queries:
+            client = arxiv.Client()
+            search = arxiv.Search(
+                query=q,
+                max_results=max(2, max_results // len(queries)),
+                sort_by=arxiv.SortCriterion.SubmittedDate
+            )
+
+            papers_dir = "./Papers"
+            if not os.path.exists(papers_dir):
+                os.makedirs(papers_dir)
+
+
+            for paper in client.results(search):
+                if paper.entry_id in seen_ids:
+                    continue
+                paper_info = {
+                    "title": paper.title,
+                    "authors": [author.name for author in paper.authors],
+                    "summary": paper.summary[:300] + "...",  # 截断摘要
+                    "published": paper.published.strftime("%Y-%m-%d"),
+                    "pdf_url": paper.pdf_url,
+                    "categories": paper.categories,
+                    "arxiv_id": paper.entry_id.split('/')[-1]
+                }
+
+                if Download:
+                    try:
+                        # 下载PDF - 改进文件名处理和错误处理
+                        logging.info(f"正在下载论文：{paper.title[:50]}...")
+
+                        # 更安全的文件名处理
+                        import re
+                        safe_title = re.sub(r'[^\w\s-]', '', paper.title)  # 移除特殊字符
+                        safe_title = re.sub(r'[-\s]+', '-', safe_title)    # 替换空格和多个连字符
+                        safe_title = safe_title.strip('-')[:40]             # 限制长度并移除首尾连字符
+
+                        if not safe_title:  # 如果标题处理后为空，使用默认名称
+                            safe_title = "paper"
+
+                        filename = f"{paper_info['arxiv_id']}_{safe_title}.pdf"
+                        full_path = os.path.join(papers_dir, filename)
+
+                        # 检查文件是否已存在
+                        if os.path.exists(full_path):
+                            logging.info(f"论文已存在，跳过下载: {filename}")
                             paper_info["local_pdf_path"] = full_path
-                            logging.info(f"✅ 成功下载: {filename}")
                         else:
-                            paper_info["local_pdf_path"] = None
-                            logging.warning(f"❌ 下载失败或文件为空: {filename}")
-                        
-                except Exception as e:
-                    paper_info["local_pdf_path"] = None
-                    logging.warning(f"❌ 下载论文失败: {paper.title[:50]}... - 错误: {str(e)}")
-                    
-                    # 如果下载失败，尝试记录更详细的错误信息
-                    error_str = str(e).lower()
-                    if "timeout" in error_str:
-                        logging.warning("可能的网络超时问题。")
-                    elif "permission" in error_str or "403" in error_str or "forbidden" in error_str:
-                        logging.warning("可能的权限问题或请求被禁止 (403 Forbidden)。这可能是由于请求频率过高。")
-                    elif "not found" in error_str or "404" in error_str:
-                        logging.warning("PDF文件可能不存在 (404 Not Found)。")
-                    elif "bad gateway" in error_str or "502" in error_str:
-                        logging.warning("服务器端错误 (502 Bad Gateway)。这可能是ArXiv服务器的临时问题。")
-            
-            papers.append(paper_info)
-            
-            # 限制处理数量，避免过多请求
-            if len(papers) >= max_results:
-                break
+                            # 使用更稳定的下载方法
+                            import time
+                            time.sleep(5)  # 增加下载间隔时间，例如5秒，以减少服务器压力
+
+                            paper.download_pdf(dirpath=papers_dir, filename=filename)
+
+                            # 验证下载是否成功
+                            if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+                                paper_info["local_pdf_path"] = full_path
+                                logging.info(f"✅ 成功下载: {filename}")
+                            else:
+                                paper_info["local_pdf_path"] = None
+                                logging.warning(f"❌ 下载失败或文件为空: {filename}")
+
+                    except Exception as e:
+                        paper_info["local_pdf_path"] = None
+                        logging.warning(f"❌ 下载论文失败: {paper.title[:50]}... - 错误: {str(e)}")
+
+                        # 如果下载失败，尝试记录更详细的错误信息
+                        error_str = str(e).lower()
+                        if "timeout" in error_str:
+                            logging.warning("可能的网络超时问题。")
+                        elif "permission" in error_str or "403" in error_str or "forbidden" in error_str:
+                            logging.warning("可能的权限问题或请求被禁止 (403 Forbidden)。这可能是由于请求频率过高。")
+                        elif "not found" in error_str or "404" in error_str:
+                            logging.warning("PDF文件可能不存在 (404 Not Found)。")
+                        elif "bad gateway" in error_str or "502" in error_str:
+                            logging.warning("服务器端错误 (502 Bad Gateway)。这可能是ArXiv服务器的临时问题。")
+
+                seen_ids.add(paper.entry_id)
+                papers.append(paper_info)
+
+                # 限制处理数量，避免过多请求
+                if len(papers) >= max_results:
+                    break
 
         logging.info(f"✅ ArXiv搜索完成，共找到 {len(papers)} 篇论文")
         successful_downloads = len([p for p in papers if p.get("local_pdf_path")])
         logging.info(f"📄 成功下载 {successful_downloads} 个PDF文件")
-        
+
         return papers
 
     except Exception as e:
@@ -130,15 +140,17 @@ def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool =
 @tool
 def search_web_content_tool(query: str) -> List[Dict]:
     """使用Tavily搜索网络内容的工具
-    
+
     Args:
         query: 搜索查询
-        
+
     Returns:
         搜索结果列表
     """
-    logging.info(f"正在网络搜索:{query}")
-    
+    logging.info(f"正在网络搜索领域:{query}")
+    queries = rag.generate_search_queries(query)
+    logging.info(f"正在网络搜索关键词:{queries}")
+
     try:
         os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
         tavily_tool = TavilySearchResults(
@@ -147,10 +159,10 @@ def search_web_content_tool(query: str) -> List[Dict]:
             include_answer=True,
             include_raw_content=True
         )
-        
-        results = tavily_tool.invoke({"query": query})
+
+        results = tavily_tool.invoke({"query": queries})
         return results
-    
+
     except Exception as e:
         return [{"error": f"网络搜索失败: {str(e)}"}]
 
@@ -166,11 +178,13 @@ def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
     Returns:
         包含论文信息的字典列表
     """
-    logging.info(f"在crossref上搜索:{query}")
-    
+    logging.info(f"在crossref上搜索领域:{query}")
+    queries = rag.generate_search_queries(query)
+    logging.info(f"在crossref上搜索领域:{queries}")
+
     try:
         works = Works()
-        search = works.query(query).sort('relevance')
+        search = works.query(queries).sort('relevance')
 
         results = []
         for i, item in enumerate(search):
