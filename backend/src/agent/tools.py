@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
 from langchain_openai import ChatOpenAI
 import backend.src.agent.rag as rag
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
