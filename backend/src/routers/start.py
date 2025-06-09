@@ -1,12 +1,10 @@
 import logging
-import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi import HTTPException, Depends
+from fastapi import Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
@@ -16,6 +14,7 @@ from config import GCF, load_config
 from threadPool import get_executor
 from backend.src.services.agent_service import agent_service
 from backend.src.services.logs_service import logs_service
+from backend.src.services.md_services import md_services
 
 # 加载配置
 load_config()
@@ -48,22 +47,11 @@ def read_root():
 #下载md文件
 @app.get("/download_md")
 async def download_md(research_field: str, uuid: str):
-    # 获取当前文件的绝对路径
-    current_file_path = Path(__file__).resolve()
-    # 获取项目的根目录路径
-    project_root = current_file_path.parents[0]  # 因为 start.py 在 ProposalAgent/backend/src/agent/routers 下
-    file_name = f"Research_Proposal_{research_field}_{uuid}.md"
-    # 构建输出文件夹的绝对路径
-    output_dir = project_root / 'output'
-    # 获取具体的 .md 文件路径
-    file_path = output_dir / file_name
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    return FileResponse(path=file_path, filename="downloaded_file.md", media_type='text/markdown')
+    path = md_services(research_field, uuid)
+    return FileResponse(path=path, filename="downloaded_file.md", media_type='text/markdown')
 
 @app.get("/logs")
-async def stream_logs(executor : ThreadPoolExecutor = Depends(get_executor)):
+async def stream_logs():
     logs_service()
     return EventSourceResponse(logs_service())
 
