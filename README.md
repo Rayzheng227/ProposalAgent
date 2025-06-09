@@ -20,7 +20,7 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 
 # Requirements
 - `python>=3.10`
-- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)
+- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)、
 
 # Installation
 1. Clone the repository
@@ -38,10 +38,14 @@ uv run agent.py
 ```
 4. 若后续开发有增加所需的库等操作，执行`uv add xxx`，如`uv add numpy`，会自动在`pyproject.toml`中以及`.venv`中增加相关库
 
+5. 在环境变量(.env)中，导入自己的DASHSCOPE_API_KEY和TAVILY_API_KEY。
+
 # 开发日志
 (日后有新的功能更新啥的可以写到这里)
 
 - 2025.6.8 : 增加了新的反问功能，现在针对提出的简单的研究方向/领域，Agent能够对研究的方向和领域提出相关问题。因为发现到在之前的demo中，Agent提出的规划有些既要又要了；加入了反问后，Agent能够**更好的去理解用户的意图**。
+
+- 2025.6.9 : Merging from wyy: 后端接口以及对tools的优化
 
 ----
 

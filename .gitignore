@@ -3,7 +3,7 @@ Papers/*
 output/*
 __pycache__/
 # TODO: 记得最后取消这个注释 
-# .env
+.env
 
 # 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep
