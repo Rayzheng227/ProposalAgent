@@ -922,7 +922,7 @@ class ProposalAgent:
     
 
 
-    def generate_proposal(self, research_field: str, user_clarifications: str = "") -> Dict[str, Any]:
+    def generate_proposal(self, research_field: str, proposal_id: str, user_clarifications: str = "") -> Dict[str, Any]:
         """生成研究计划书"""
         initial_state = ProposalState(
             research_field=research_field,
@@ -954,6 +954,7 @@ class ProposalAgent:
             final_references="", 
             conclusion="",       
             final_report_markdown="" # 初始化最终报告字段
+
         )
         initial_state["proposal_id"] = proposal_id
         logging.info(f"🚀 开始处理研究问题: '{research_field}'")

@@ -19,11 +19,11 @@ if __name__ == "__main__":
 # <<<<<<< wyy-RAG
 #     research_question = "大模型的推理优化"
 #     result = agent.generate_proposal(research_question, "demo_test")
-=======
+# =======
     research_question = input("请输入研究问题（Research Question）：")
     
     # 第一次调用，可能生成澄清问题
-    result = agent.generate_proposal(research_question，"demo_test")
+    result = agent.generate_proposal(research_question,"demo_test")
     
     user_clarifications = ""
     # 检查是否生成了澄清问题且图形在等待输入时结束
@@ -35,12 +35,11 @@ if __name__ == "__main__":
         
         print("\n请将您的回答合并成一段文字输入。")
         user_response = input("您的澄清：") # 脚本将在这里等待输入
-        
         user_clarifications = user_response.strip() # 如果用户直接按回车，这里可以是空的
-        
+
         # 第二次调用，传入用户的澄清（即使为空）
         print("\n🔄 正在根据您的澄清重新规划研究...\n")
-        result = agent.generate_proposal(research_question, user_clarifications=user_clarifications)
+        result = agent.generate_proposal(research_question, user_clarifications=user_clarifications, proposal_id="demo_test")
 
 # >>>>>>> main
     print("\n" + "="*60)
