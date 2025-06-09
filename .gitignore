@@ -1,7 +1,7 @@
 # 忽略 Papers 文件夹中的所有内容
 Papers/*
 output/*
-__pycache__/*
+__pycache__
 # TODO: 记得最后取消这个注释 
 .env
 .venv
