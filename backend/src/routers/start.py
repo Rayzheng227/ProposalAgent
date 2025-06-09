@@ -1,20 +1,21 @@
-import asyncio
 import logging
 import os
-
-from fastapi import HTTPException, Depends
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi.responses import FileResponse
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
+from fastapi import HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
+
 from backend.src.routers.log import QueueLogHandler, log_queue
 from config import GCF, load_config
-from backend.src.agent.graph import ProposalAgent
 from threadPool import get_executor
-from concurrent.futures import ThreadPoolExecutor
+from backend.src.services.agent_service import agent_service
+from backend.src.services.logs_service import logs_service
 
 # 加载配置
 load_config()
@@ -46,11 +47,12 @@ def read_root():
 
 #下载md文件
 @app.get("/download_md")
-async def download_md(file_name: str):
+async def download_md(research_field: str, uuid: str):
     # 获取当前文件的绝对路径
     current_file_path = Path(__file__).resolve()
     # 获取项目的根目录路径
-    project_root = current_file_path.parents[3]  # 因为 start.py 在 ProposalAgent/backend/src/agent/routers 下
+    project_root = current_file_path.parents[0]  # 因为 start.py 在 ProposalAgent/backend/src/agent/routers 下
+    file_name = f"Research_Proposal_{research_field}_{uuid}.md"
     # 构建输出文件夹的绝对路径
     output_dir = project_root / 'output'
     # 获取具体的 .md 文件路径
@@ -62,20 +64,16 @@ async def download_md(file_name: str):
 
 @app.get("/logs")
 async def stream_logs(executor : ThreadPoolExecutor = Depends(get_executor)):
-    async def event_generator():
-        while True:
-            if not log_queue.empty():
-                yield {"event": "log", "data": log_queue.get_nowait()}
-            await asyncio.sleep(0.1)
-    return EventSourceResponse(event_generator())
+    logs_service()
+    return EventSourceResponse(logs_service())
 
 @app.get("/agent")
-async def agent(research_question: str, executor : ThreadPoolExecutor = Depends(get_executor)):
+async def agent(research_field: str, executor : ThreadPoolExecutor = Depends(get_executor)):
+    uuid__hex = uuid.uuid4().hex
     def agent_task():
-        agent = ProposalAgent()
-        agent.generate_proposal(research_question)
+        agent_service(research_field, uuid__hex)
     executor.submit(agent_task)
-    return
+    return {"Proposal_id" : uuid__hex}
 
 
 if __name__ == "__main__":

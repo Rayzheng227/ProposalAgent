@@ -665,10 +665,11 @@ class ProposalAgent:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
             
-        # 文件名包含时间戳
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 用uuid替换时间戳
+        uuid = state["proposal_id"]
+        #timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_research_field = "".join(c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
-        report_filename = f"Research_Proposal_{safe_research_field}_{timestamp}.md"
+        report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
         report_filepath = os.path.join(output_dir, report_filename)
         
         # 构建Markdown内容
@@ -817,7 +818,7 @@ class ProposalAgent:
         return workflow.compile() 
     
 
-    def generate_proposal(self, research_field: str) -> Dict[str, Any]:
+    def generate_proposal(self, research_field: str, proposal_id: str) -> Dict[str, Any]:
         """生成研究计划书"""
         initial_state = ProposalState(
             research_field=research_field,
@@ -848,7 +849,7 @@ class ProposalAgent:
             conclusion="",       
             final_report_markdown="" # 初始化最终报告字段
         )
-        
+        initial_state["proposal_id"] = proposal_id
         logging.info(f"🚀 开始处理研究问题: '{research_field}'")
         result = self.workflow.invoke(initial_state)
         return result
