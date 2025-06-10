@@ -105,9 +105,16 @@ class ProposalAgent:
         research_field = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
         existing_questions = state.get("clarification_questions", [])
-
+        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
+        
+        # 如果有修订指导，跳过生成澄清问题
+        if revision_guidance:
+            logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
+            state["clarification_questions"] = []  # 清空可能存在的问题
+            return state
+        
+        # 原有逻辑保持不变
         if user_clarifications:
-            logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
             # 用户已提供澄清，无需再生成问题
             state["clarification_questions"] = [] # 清空旧问题（如果有）
             return state
@@ -138,23 +145,55 @@ class ProposalAgent:
         return state
 
     def create_master_plan_node(self, state: ProposalState) -> ProposalState:
-        """首先基于问题去创建一个总体的规划(不同于Proposal)"""
+        """首先基于问题去创建一个总体的规划"""
         research_field_original = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
+        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
         tools_info = self.get_tools_info_text()
 
-        clarification_text_for_prompt = ""
+        # 构建提示文本
+        prompt_additions = []
+        
         if user_clarifications:
-            clarification_text_for_prompt = (
-                f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
+            clarification_text = (
+                f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息：\n"
                 f"{user_clarifications}\n"
             )
-            logging.info("📝 正在使用用户提供的澄清信息来指导总体规划。")
+            prompt_additions.append(clarification_text)
+            logging.info("📝 使用用户提供的澄清信息来指导总体规划。")
 
-        # 修改 master_plan_instruction 提示字符串
-        # 目标插入位置：在 "Research Field: {research_field}" 行之后
-        # 以及 "Available Tools:" 之前
-        
+        if revision_guidance:
+            # 提取修订指南的摘要部分
+            revision_summary = ""
+            lines = revision_guidance.split("\n")
+            in_key_issues = False
+            count = 0
+            
+            for line in lines:
+                if "需要改进的关键问题" in line:
+                    in_key_issues = True
+                    revision_summary += line + "\n"
+                    continue
+                
+                if in_key_issues and line.strip() and not line.startswith("##"):
+                    revision_summary += line + "\n"
+                    count += 1
+                    
+                if count > 5 or (in_key_issues and line.startswith("##")):
+                    in_key_issues = False
+                    
+            if not revision_summary:
+                # 如果没有提取到关键问题，使用前500个字符作为摘要
+                revision_summary = revision_guidance[:500] + "...(更多详细修订建议)"
+                
+            revision_text = (
+                f"\n\n修订指导：请根据以下修订建议调整研究计划，保留原计划的优势并改进不足：\n"
+                f"{revision_summary}\n"
+            )
+            prompt_additions.append(revision_text)
+            logging.info("📝 使用评审反馈的修订指导来改进计划。")
+
+        # 构建完整提示
         base_prompt_template = master_plan_instruction # 从 prompts.py 导入
 
         lines = base_prompt_template.splitlines()
@@ -162,13 +201,13 @@ class ProposalAgent:
         inserted = False
         for line in lines:
             new_lines.append(line)
-            if "{research_field}" in line and clarification_text_for_prompt:
-                # 在包含 {research_field} 的行之后插入澄清信息
-                new_lines.append(clarification_text_for_prompt)
+            if "{research_field}" in line and prompt_additions:
+                # 在包含 {research_field} 的行之后插入提示信息
+                new_lines.extend(prompt_additions)
                 inserted = True
         
-        if not inserted and clarification_text_for_prompt: # 后备：如果占位符未找到，则追加
-            new_lines.append(clarification_text_for_prompt)
+        if not inserted and prompt_additions: # 后备：如果占位符未找到，则追加
+            new_lines.extend(prompt_additions)
             
         modified_master_plan_prompt_template = "\n".join(new_lines)
         
@@ -193,7 +232,15 @@ class ProposalAgent:
     
     # Ensure this method is correctly indented as part of the ProposalAgent class
     def _decide_after_clarification(self, state: ProposalState) -> str:
-        """Determines the next step after the clarification node."""
+        """确定澄清节点后的下一步。"""
+        revision_guidance = state.get("revision_guidance", "")
+        
+        # 如果有修订指导，直接进入下一步
+        if revision_guidance:
+            logging.info("✅ 检测到修订指导，直接进入计划生成阶段。")
+            return "proceed_to_master_plan"
+            
+        # 原有逻辑
         if state.get("clarification_questions") and not state.get("user_clarifications"):
             logging.info("❓ Clarification questions generated. Waiting for user input.")
             return "end_for_user_input" 
@@ -432,7 +479,7 @@ class ProposalAgent:
         web_refs = [ref for ref in reference_list if ref.get("type") == "Web"]
         
         if arxiv_refs:
-            literature_summary += "\n\n**相关ArXiv论文：**\n"
+            literature_summary += "\n\n**相关Arxiv论文：**\n"
             for ref in arxiv_refs:
                 literature_summary += f"[{ref['id']}] {ref['title']}\n"
                 literature_summary += f"   作者: {', '.join(ref['authors'])}\n"
@@ -805,11 +852,6 @@ class ProposalAgent:
             # 为简单起见，我们让它继续，但总体规划可能不够聚焦。
             # 一个更好的方法是，如果clarification_questions存在，则在此处返回一个特殊信号
             # 让调用者知道需要用户输入。但当前langgraph的should_continue通常用于工具执行循环。
-            # logging.info("⏳ 等待用户对澄清问题的回应。继续当前流程，但建议提供澄清以获得更佳结果。")
-            # 如果澄清问题已生成但用户未提供澄清，则不应直接进入工具执行或写作
-            # 理想情况下，这里应该有一个分支逻辑，如果澄清问题存在且无答案，则图应该结束并返回问题
-            # 但由于 `should_continue` 主要控制工具执行循环，我们将允许它进入plan_analysis
-            # plan_analysis 和 master_plan 会基于有无澄清信息来调整行为
             pass
 
 
@@ -917,11 +959,21 @@ class ProposalAgent:
         return workflow.compile() 
     
 
-    def generate_proposal(self, research_field: str, user_clarifications: str = "") -> Dict[str, Any]:
-        """生成研究计划书"""
+    def generate_proposal(self, research_field: str, user_clarifications: str = "", revision_guidance: str = "") -> Dict[str, Any]:
+        """生成研究计划书
+        
+        Args:
+            research_field: 研究领域
+            user_clarifications: 用户对研究方向的澄清信息
+            revision_guidance: 评审后的修订指导
+        
+        Returns:
+            生成的研究计划书内容
+        """
         initial_state = ProposalState(
             research_field=research_field,
-            user_clarifications=user_clarifications, # 新增：接收用户澄清
+            user_clarifications=user_clarifications,
+            revision_guidance=revision_guidance,  # 添加参数到状态
             clarification_questions=[], # 新增：初始化澄清问题列表
             query="",
             arxiv_papers=[],
@@ -952,5 +1004,8 @@ class ProposalAgent:
         )
         
         logging.info(f"🚀 开始处理研究问题: '{research_field}'")
+        if revision_guidance:
+            logging.info(f"📝 使用修订指导: {revision_guidance[:100]}...")
+        
         result = self.workflow.invoke(initial_state)
         return result

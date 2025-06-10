@@ -5,7 +5,7 @@ from typing import TypedDict, List, Dict, Any
 
 class ProposalState(TypedDict):
     """定义Proposal生成过程中的状态"""
-    research_field: str
+    research_field: str                  # 研究领域
     query: str
     arxiv_papers: List[Dict]
     web_search_results: List[Dict]
@@ -33,4 +33,5 @@ class ProposalState(TypedDict):
     conclusion: str # 新增结论字段
     final_report_markdown: str # 新增最终报告Markdown内容字段
     clarification_questions: List[str] # 新增：代理生成的澄清问题
-    user_clarifications: str # 新增：用户对澄清问题的回答
+    user_clarifications: str             # 用户提供的澄清信息
+    revision_guidance: str               # 新增：评审后的修订指导
