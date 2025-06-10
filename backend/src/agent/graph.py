@@ -30,15 +30,6 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
 base_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # 输出到控制台
-    ],
-    force=True # 强制覆盖任何已存在的配置
-)
-
 class ProposalAgent:
     def __init__(self):
         """初始化ProposalAgent"""
@@ -812,9 +803,9 @@ class ProposalAgent:
             logging.info("🛑 达到最大迭代次数，结束执行并生成报告。")
             return "end_report"
         
-        # 每 3 步总结一次历史
-        if current_step_index > 0 and current_step_index % 3 == 0:
-            logging.info(" ciclo de resumo de 3 etapas")
+        # 每 1 步总结一次历史
+        if current_step_index > 0 and current_step_index % 1 == 0:
+            logging.info("📝 正在为上一步生成摘要...")
             return "summarize"
 
         return "continue"
@@ -945,40 +936,75 @@ class ProposalAgent:
         return result
 
     def summarize_history_node(self, state: ProposalState) -> ProposalState:
-        """回顾执行历史并生成摘要"""
-        logging.info("🧠 开始生成执行历史摘要...")
+        """
+        回顾执行历史并生成摘要。
+        采用增量式摘要策略：基于旧的摘要和最新的一步来生成新摘要。
+        """
+        logging.info("🧠 开始生成增量式执行历史摘要...")
         
         execution_memory = state.get("execution_memory", [])
         if not execution_memory:
             return state # 如果没有历史，则跳过
 
-        # 将历史记录格式化为文本
-        memory_text = "\n".join([
-            f"- 步骤: {mem.get('description', 'N/A')}, "
-            f"结果: {'成功' if mem.get('success') else '失败'}, "
-            f"详情: {str(mem.get('result', ''))[:150]}..."
-            for mem in execution_memory
-        ])
+        old_summary = state.get("history_summary", "")
+        latest_step = execution_memory[-1] # 只取最新的一步
 
-        prompt = f"""
-        请根据以下任务执行历史，生成一段简洁、精炼的摘要。
-        摘要需要捕捉到目前为止的关键发现、遇到的主要障碍或失败，以及尚未解决的核心问题。
-        这将作为后续规划的唯一上下文，所以请确保信息的准确性和完整性。
+        # 将最新步骤格式化为文本
+        latest_step_text = (
+            f"- 描述: {latest_step.get('description', 'N/A')}\n"
+            f"- 动作: {latest_step.get('action', 'N/A')}\n"
+            f"- 结果: {'成功' if latest_step.get('success') else '失败'}\n"
+            f"- 详情: {str(latest_step.get('result', ''))[:200]}..."
+        )
 
-        原始研究问题: {state['research_field']}
-        当前研究计划: {state['research_plan']}
+        # 如果没有旧摘要（这是第一次总结），则对目前所有的历史进行总结
+        if not old_summary:
+            prompt_template = """
+            你是一个研究助理，正在为一项复杂的科研任务撰写第一份进度摘要。
+            请根据以下到目前为止的所有执行历史，生成一段简洁、精炼的摘要。
+            摘要需要捕捉到关键发现、遇到的主要障碍或失败，以及尚未解决的核心问题。
 
-        执行历史:
-        {memory_text}
+            原始研究问题: {research_field}
+            
+            执行历史:
+            {history}
 
-        请输出摘要:
-        """
-        
+            请输出摘要:
+            """
+            # 格式化完整的历史记录
+            full_history_text = "\n".join([
+                f"- 步骤 {i+1}: {mem.get('description', 'N/A')}, 结果: {'成功' if mem.get('success') else '失败'}, 详情: {str(mem.get('result', ''))[:150]}..."
+                for i, mem in enumerate(execution_memory)
+            ])
+            prompt = prompt_template.format(
+                research_field=state['research_field'],
+                history=full_history_text
+            )
+        else:
+            # 如果有旧摘要，则进行增量更新
+            prompt_template = """
+            你是一个研究助理，正在实时更新一份任务进度摘要。
+            你的任务是根据【上一版的摘要】和【最新完成的步骤】，生成一份【更新后的摘要】。
+            请不要重复旧摘要已有的信息，重点在于整合新信息并提炼出当前最关键的发现、障碍和结论。
+
+            【上一版的摘要】:
+            {old_summary}
+
+            【最新完成的步骤】:
+            {latest_step}
+
+            请输出一份简洁、连贯的【更新后的摘要】:
+            """
+            prompt = prompt_template.format(
+                old_summary=old_summary,
+                latest_step=latest_step_text
+            )
+
         response = self.llm.invoke([SystemMessage(content=prompt)])
         summary = response.content.strip()
         
         state["history_summary"] = summary
-        logging.info(f"✅ 生成摘要完成: {summary[:200]}...")
+        logging.info(f"✅ 生成摘要完成: {summary}")
         
         return state
 
