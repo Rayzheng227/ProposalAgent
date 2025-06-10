@@ -5,6 +5,8 @@ __pycache__
 # TODO: 记得最后取消这个注释 
 .env
 .venv
+# lock文件也ignore掉
+uv.lock
 
 # 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep

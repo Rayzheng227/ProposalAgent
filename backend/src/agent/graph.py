@@ -792,65 +792,58 @@ class ProposalAgent:
 
     def should_continue(self, state: ProposalState) -> str:
         """决定是否继续执行或进入写作阶段"""
-        # 新增：如果刚生成了澄清问题且用户尚未回应，则应提示用户回应
+    
+        # 1. 首先检查澄清问题状态（保留原逻辑）
         if state.get("clarification_questions") and not state.get("user_clarifications"):
-            # 在实践中，图应该在此处暂停或结束，等待用户输入。
-            # 对于当前单次调用模型，我们将允许其继续，但总体规划会受影响。
-            # 或者，可以设计一个特殊的结束状态，提示需要用户输入。
-            # 为简单起见，我们让它继续，但总体规划可能不够聚焦。
-            # 一个更好的方法是，如果clarification_questions存在，则在此处返回一个特殊信号
-            # 让调用者知道需要用户输入。但当前langgraph的should_continue通常用于工具执行循环。
-            # logging.info("⏳ 等待用户对澄清问题的回应。继续当前流程，但建议提供澄清以获得更佳结果。")
-            # 如果澄清问题已生成但用户未提供澄清，则不应直接进入工具执行或写作
-            # 理想情况下，这里应该有一个分支逻辑，如果澄清问题存在且无答案，则图应该结束并返回问题
-            # 但由于 `should_continue` 主要控制工具执行循环，我们将允许它进入plan_analysis
-            # plan_analysis 和 master_plan 会基于有无澄清信息来调整行为
+            # 如果有澄清问题但用户未回应，继续执行但可能效果不佳
+            logging.info("⏳ 检测到未回应的澄清问题，但继续执行流程")
             pass
 
-
-        current_step = state.get("current_step", 0)
+        # 2. 获取基本状态信息
+        current_step_index = state.get("current_step", 0)
         execution_plan = state.get("execution_plan", [])
         execution_memory = state.get("execution_memory", [])
         max_iterations = state.get("max_iterations", 10)
-        
-        # 检查是否达到最大迭代次数
+        max_steps = len(execution_plan)
+
+        # 3. 检查是否超过最大迭代次数（安全上限）
         if len(execution_memory) >= max_iterations:
-            logging.info(f"达到最大工具执行次数 ({max_iterations})，进入写作阶段") # 更新日志消息
-            return "write_introduction"
+            logging.info(f"🛑 达到最大执行次数 ({max_iterations})，进入写作阶段")
+            return "end_report"
         
-        # 检查是否还有步骤要执行
-        if current_step < len(execution_plan):
-            return "execute_step"
-        
-        # 检查是否收集到足够的信息
+        # 4. 检查是否所有计划步骤都已完成
+        if current_step_index >= max_steps:
+            logging.info("✅ 所有计划内步骤已执行完成，进入写作阶段")
+            return "end_report"
+
+        # 5. 每执行1步后进行历史摘要（可配置）
+        summarize_interval = 1  # 可以调整这个值
+        if current_step_index > 0 and current_step_index % summarize_interval == 0:
+            logging.info(f"📝 执行了 {current_step_index} 步，正在生成历史摘要...")
+            return "summarize"
+
+        # 6. 检查是否收集到足够信息（提前结束条件）
         arxiv_papers = state.get("arxiv_papers", [])
         web_results = state.get("web_search_results", [])
         
-        logging.info(f"当前收集情况: {len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果")
-        
-        # 如果已经收集到足够的信息，进入写作阶段
-        if len(arxiv_papers) >= 3 or len(web_results) >= 3:
-            logging.info("已收集到足够信息，进入写作阶段")
-            return "write_introduction"
-        
-        # 检查最近的执行结果
-        recent_results = execution_memory[-3:] if len(execution_memory) >= 3 else execution_memory
-        successful_results = [r for r in recent_results if r.get("success", False)]
-        
-        # 如果最近的结果都不成功，重新规划
-        if len(successful_results) < len(recent_results) * 0.3:
-            logging.info("最近执行结果不理想，重新规划...")
-            state["current_step"] = 0
-            return "plan_analysis"
-        
-        # 如果执行了一轮但信息不足，继续规划
-        if len(arxiv_papers) < 3 and len(web_results) < 3:
-            logging.info("信息收集不足，继续规划...")
-            state["current_step"] = 0
-            return "plan_analysis"
-        
-        # 默认进入写作阶段
-        return "write_introduction"
+        if len(arxiv_papers) >= 5 and len(web_results) >= 5:
+            logging.info(f"📚 已收集充足信息 ({len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果)，提前进入写作阶段")
+            return "end_report"
+
+        # 7. 检查最近执行结果质量（智能重规划）
+        if len(execution_memory) >= 3:
+            recent_results = execution_memory[-3:]
+            successful_results = [r for r in recent_results if r.get("success", False)]
+            
+            # 如果最近3步中成功率低于30%，考虑重新规划
+            if len(successful_results) < len(recent_results) * 0.3:
+                logging.info("⚠️ 最近执行成功率较低，重新规划...")
+                state["current_step"] = 0  # 重置步数计数器
+                return "plan_analysis"
+
+        # 8. 默认继续执行下一步
+        logging.info(f"🚀 继续执行步骤 {current_step_index + 1}/{max_steps}")
+        return "continue"
     
     
     
@@ -899,8 +892,10 @@ class ProposalAgent:
             self.should_continue,
             {
                 "continue": "execute_step", # <-- 核心修改：直接返回执行下一步
+                "plan_analysis": "plan_analysis", # 如果需要重新规划
                 "summarize": "summarize_history",
                 "end_report": "add_references" # 结束循环，开始整合报告
+
             }
         )
         
