@@ -1,10 +1,62 @@
-# 忽略 Papers 文件夹中的所有内容
-Papers/*
-output/*
-__pycache__/
-# TODO: 记得最后取消这个注释 
-# .env
+# Environments
+.env
+.venv
+/venv/
+.idea
 
-# 但保留 .gitkeep 占位符文件
-!Papers/.gitkeep
-!output/.gitkeep
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Output and data files
+output/
+Papers/
+chroma_db/
+*.pdf
+*.md
+
+# Distribution / packaging
+.Python
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Other
+*.iml
+.DS_Store
+.project
+.settings

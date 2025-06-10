@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict, List, Dict, Any
@@ -20,6 +21,8 @@ import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool,search_crossref_papers_tool,search_web_content_tool,summarize_pdf
 from .state import ProposalState
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 
 
 load_dotenv()
@@ -32,7 +35,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # 输出到控制台
-    ]
+    ],
+    force=True # 强制覆盖任何已存在的配置
 )
 
 class ProposalAgent:
@@ -51,7 +55,16 @@ class ProposalAgent:
         self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
-        self.workflow = self._build_workflow() # _build_workflow is called here
+        
+        # 初始化长期记忆
+        self.embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        self.long_term_memory = Chroma(
+            collection_name="proposal_agent_memory",
+            embedding_function=self.embedding_function,
+            persist_directory="./chroma_db" # 持久化存储路径
+        )
+        
+        self.workflow = self._build_workflow()
 
     
     def load_tools_description(self) -> List[Dict]:
@@ -138,53 +151,60 @@ class ProposalAgent:
         return state
 
     def create_master_plan_node(self, state: ProposalState) -> ProposalState:
-        """首先基于问题去创建一个总体的规划(不同于Proposal)"""
+        """首先基于问题去创建一个总体的规划"""
         research_field_original = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
         tools_info = self.get_tools_info_text()
 
+        # --- 从长期记忆中检索相关信息 ---
+        logging.info(f"🔍 正在从长期记忆中检索与 '{research_field_original}' 相关的信息...")
+        try:
+            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2) # 检索最相关的2个
+        except Exception as e:
+            logging.warning(f"⚠️ 从长期记忆中检索信息失败: {e}")
+            retrieved_docs = []
+        
+        retrieved_knowledge_text = ""
+        if retrieved_docs:
+            logging.info(f"✅ 从长期记忆中检索到 {len(retrieved_docs)} 条相关记录。")
+            retrieved_knowledge_text += "\n\n### 供参考的历史研究项目摘要\n"
+            retrieved_knowledge_text += "这是过去完成的类似研究项目，你可以借鉴它们的思路和结论，但不要照搬。\n"
+            for i, doc in enumerate(retrieved_docs):
+                retrieved_knowledge_text += f"\n--- 相关历史项目 {i+1} ---\n"
+                retrieved_knowledge_text += doc.page_content
+                retrieved_knowledge_text += "\n--------------------------\n"
+        # ------------------------------------
+
         clarification_text_for_prompt = ""
         if user_clarifications:
             clarification_text_for_prompt = (
-                f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
+                f"\n\n### 用户提供的额外信息\n"
+                f"为进一步聚焦研究方向，用户提供了以下澄清，请务必仔细考虑：\n"
                 f"{user_clarifications}\n"
             )
             logging.info("📝 正在使用用户提供的澄清信息来指导总体规划。")
 
-        # 修改 master_plan_instruction 提示字符串
-        # 目标插入位置：在 "Research Field: {research_field}" 行之后
-        # 以及 "Available Tools:" 之前
-        
-        base_prompt_template = master_plan_instruction # 从 prompts.py 导入
-
-        lines = base_prompt_template.splitlines()
-        new_lines = []
-        inserted = False
-        for line in lines:
-            new_lines.append(line)
-            if "{research_field}" in line and clarification_text_for_prompt:
-                # 在包含 {research_field} 的行之后插入澄清信息
-                new_lines.append(clarification_text_for_prompt)
-                inserted = True
-        
-        if not inserted and clarification_text_for_prompt: # 后备：如果占位符未找到，则追加
-            new_lines.append(clarification_text_for_prompt)
-            
-        modified_master_plan_prompt_template = "\n".join(new_lines)
-        
-        master_planning_prompt = modified_master_plan_prompt_template.format(
-            research_field=research_field_original, # 此处使用原始研究领域
+        prompt_template = master_plan_instruction.format(
+            research_field=research_field_original,
             tools_info=tools_info
         )
-
-        logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清) 制定总体研究计划...")
-        response = self.llm.invoke([HumanMessage(content=master_planning_prompt)])
+        
+        # 将所有上下文信息整合到最终的提示中
+        final_prompt = (
+            f"{prompt_template}\n"
+            f"{clarification_text_for_prompt}\n"
+            f"{retrieved_knowledge_text}"
+        )
+        
+        logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清和历史知识) 制定总体研究计划...")
+        response = self.llm.invoke([HumanMessage(content=final_prompt)])
         
         state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
         state["execution_memory"] = []
+        state["history_summary"] = "" # 重置历史摘要
         state["current_step"] = 0
-        state["max_iterations"] = 10 # 可以考虑调整，因为澄清步骤可能消耗一次迭代的意图
+        state["max_iterations"] = 10 
 
         logging.info("✅ 总体研究计划制定完成")
         logging.info(f"研究计划内容 (部分): {state['research_plan'][:300]}...")
@@ -206,18 +226,23 @@ class ProposalAgent:
         research_field = state["research_field"]
         research_plan = state["research_plan"]
         tools_info = self.get_tools_info_text()
-        execution_memory = state.get("execution_memory", [])
-
+        history_summary = state.get("history_summary", "")
 
         memory_text = ""
-        if execution_memory:
-            memory_text = "\n\n执行历史:\n"
-            for step in execution_memory:
-                description = step.get('description', '未知步骤')
-                result = step.get('result', '无结果')
-                success = step.get('success', False)
-                status = "成功" if success else "失败"
-                memory_text += f"- {description}: {status} - {result[:100]}...\n"
+        if history_summary:
+            memory_text = f"\n\n执行历史摘要:\n{history_summary}\n"
+            logging.info("🧠 已使用历史摘要作为上下文。")
+        else:
+            # 只有在没有摘要时，才使用完整的执行历史
+            execution_memory = state.get("execution_memory", [])
+            if execution_memory:
+                memory_text = "\n\n完整执行历史:\n"
+                for step in execution_memory:
+                    description = step.get('description', '未知步骤')
+                    result = step.get('result', '无结果')
+                    success = step.get('success', False)
+                    status = "成功" if success else "失败"
+                    memory_text += f"- {description}: {status} - {result[:100]}...\n"
 
         
         # 首先让Agent分析计划，确定检索策略
@@ -265,101 +290,79 @@ class ProposalAgent:
 
         return state
     
-
     def execute_step_node(self, state: ProposalState) -> ProposalState:
         """执行当前步骤"""
         execution_plan = state.get("execution_plan", [])
-        current_step = state.get("current_step", 0)
-        execution_memory = state.get("execution_memory", [])
+        current_step_index = state.get("current_step", 0)
         
-        if current_step >= len(execution_plan):
-            logging.info("所有步骤已执行完成")
+        if current_step_index >= len(execution_plan):
+            logging.info("所有计划内步骤已执行完成，无需进一步操作。")
+            # This case should ideally be caught by should_continue, but as a safeguard:
             return state
         
-        current_action = execution_plan[current_step]
+        # 使用索引获取当前步骤，不修改原始列表
+        current_action = execution_plan[current_step_index]
         action_name = current_action.get("action")
         parameters = current_action.get("parameters", {})
         description = current_action.get("description", "")
         
-        logging.info(f"🚀 执行步骤 {current_step + 1}: {description}")
+        logging.info(f"🚀 执行步骤 {current_step_index + 1}/{len(execution_plan)}: {description}")
         
-        # 执行对应的工具
         result = None
+        memory_entry = {}
         try:
-            if action_name == "search_arxiv_papers":
-                result = search_arxiv_papers_tool.invoke(parameters)
-                # 将结果保存到状态中
-                if isinstance(result, list) and len(result) > 0:
-                    state["arxiv_papers"].extend(result)
-                    
-            elif action_name == "search_web_content":
-                result = search_web_content_tool.invoke(parameters)
-                # 将结果保存到状态中
-                if isinstance(result, list) and len(result) > 0:
-                    state["web_search_results"].extend(result)
-                    
-            elif action_name == "search_crossref_papers":
-                result = search_crossref_papers_tool.invoke(parameters)
-                # 将结果保存到状态中
-                if isinstance(result, list) and len(result) > 0:
-                    state["web_search_results"].extend(result)
-                    
-            elif action_name == "summarize_pdf":
-                # 改进PDF摘要的路径处理
-                pdf_path = parameters.get("path", "")
-                
-                # 如果没有指定具体路径，尝试找到已下载的PDF
-                if not pdf_path or not os.path.exists(pdf_path):
-                    # 查找已下载的PDF文件
-                    available_pdfs = []
-                    for paper in state.get("arxiv_papers", []):
-                        if paper.get("local_pdf_path") and os.path.exists(paper["local_pdf_path"]):
-                            available_pdfs.append(paper["local_pdf_path"])
-                    
-                    if available_pdfs:
-                        pdf_path = available_pdfs[0]  # 使用第一个可用的PDF
-                        logging.info(f"📄 使用可用的PDF文件: {pdf_path}")
-                    else:
-                        logging.warning("❌ 没有找到可用的PDF文件进行摘要")
-                        result = {"error": "没有找到可用的PDF文件"}
-                
-                if pdf_path and os.path.exists(pdf_path):
-                    result = summarize_pdf.invoke({"path": pdf_path})
-                    # PDF摘要结果可以存储到执行记录中，或者添加到论文信息中
-                    if result and "error" not in result:
-                        # 将摘要添加到对应的论文信息中
-                        for paper in state["arxiv_papers"]:
-                            if paper.get("local_pdf_path") == pdf_path:
-                                paper["detailed_summary"] = result["summary"]
-                                break
-            
-            # 每次收集到新数据后，立即更新参考文献列表
+            # 根据action_name调用相应的工具
+            tool_to_call = {
+                "search_arxiv_papers": search_arxiv_papers_tool,
+                "search_web_content": search_web_content_tool,
+                "search_crossref_papers": search_crossref_papers_tool,
+                "summarize_pdf": summarize_pdf,
+            }.get(action_name)
+
+            if tool_to_call:
+                result = tool_to_call.invoke(parameters)
+                # 特定于工具的状态更新
+                if action_name == "search_arxiv_papers":
+                    state["arxiv_papers"].extend(result or [])
+                elif action_name in ["search_web_content", "search_crossref_papers"]:
+                    state["web_search_results"].extend(result or [])
+                elif action_name == "summarize_pdf" and result and "summary" in result:
+                     for paper in state["arxiv_papers"]:
+                        if paper.get("local_pdf_path") == parameters.get("path"):
+                            paper["detailed_summary"] = result["summary"]
+                            break
+            else:
+                result = f"未知或不支持的 action: {action_name}"
+                raise ValueError(result)
+
+            # 每次成功获取数据后更新参考文献
             state = self.add_references_from_data(state)
             
-            # 记录执行结果
-            execution_memory.append({
-                "step_id": current_step + 1,
+            memory_entry = {
+                "step_id": current_step_index + 1,
                 "action": f"{action_name}({parameters})",
                 "description": description,
-                "result": str(result)[:200] if result else "无结果",
-                "success": result is not None and (not isinstance(result, list) or len(result) > 0)
-            })
-            
+                "result": str(result)[:500] if result else "无结果",
+                "success": True,
+            }
+
         except Exception as e:
-            logging.error(f"执行步骤失败: {e}")
-            execution_memory.append({
-                "step_id": current_step + 1,
+            logging.error(f"执行步骤 '{description}' 失败: {e}")
+            memory_entry = {
+                "step_id": current_step_index + 1,
                 "action": f"{action_name}({parameters})",
                 "description": description,
                 "result": f"执行失败: {str(e)}",
-                "success": False
-            })
+                "success": False,
+            }
         
-        state["execution_memory"] = execution_memory
-        state["current_step"] = current_step + 1
+        # 更新执行历史和步数计数器
+        state["execution_memory"].append(memory_entry)
+        state["current_step"] = current_step_index + 1
         
+        logging.info(f"✅ 步骤 {state['current_step']}/{len(execution_plan)} 执行完成: {action_name}")
         return state
-    
+
     def add_references_from_data(self, state: ProposalState) -> ProposalState:
         """从收集的数据中提取并添加参考文献"""
         arxiv_papers = state.get("arxiv_papers", [])
@@ -657,7 +660,7 @@ class ProposalAgent:
         
         {coherence_instruction}
         
-        请基于以上信息，按照instruction的要求，为“{research_field}”这个研究主题撰写一个学术规范的研究设计部分。
+        请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的研究设计部分。
         重点关注研究数据、方法、工作流程和局限性。
         必须**使用中文撰写**
         **不要包含时间安排或预期成果总结，这些将在结论部分统一阐述。**
@@ -719,8 +722,8 @@ class ProposalAgent:
         return state
 
     def generate_final_report_node(self, state: ProposalState) -> ProposalState:
-        """生成最终的Markdown研究计划书报告"""
-        logging.info("📄 正在生成最终的研究计划书Markdown报告...")
+        """生成最终报告的Markdown格式内容"""
+        logging.info("✍️ 开始生成最终的研究计划书...")
         
         research_field = state.get("research_field", "未知领域")
         introduction = state.get("introduction", "无引言内容")
@@ -737,10 +740,11 @@ class ProposalAgent:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
             
-        # 文件名包含时间戳
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 用uuid替换时间戳
+        uuid = state["proposal_id"]
+        #timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_research_field = "".join(c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
-        report_filename = f"Research_Proposal_{safe_research_field}_{timestamp}.md"
+        report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
         report_filepath = os.path.join(output_dir, report_filename)
         
         # 构建Markdown内容
@@ -796,161 +800,217 @@ class ProposalAgent:
         return state
 
     def should_continue(self, state: ProposalState) -> str:
-        """决定是否继续执行或进入写作阶段"""
-        # 新增：如果刚生成了澄清问题且用户尚未回应，则应提示用户回应
-        if state.get("clarification_questions") and not state.get("user_clarifications"):
-            # 在实践中，图应该在此处暂停或结束，等待用户输入。
-            # 对于当前单次调用模型，我们将允许其继续，但总体规划会受影响。
-            # 或者，可以设计一个特殊的结束状态，提示需要用户输入。
-            # 为简单起见，我们让它继续，但总体规划可能不够聚焦。
-            # 一个更好的方法是，如果clarification_questions存在，则在此处返回一个特殊信号
-            # 让调用者知道需要用户输入。但当前langgraph的should_continue通常用于工具执行循环。
-            # logging.info("⏳ 等待用户对澄清问题的回应。继续当前流程，但建议提供澄清以获得更佳结果。")
-            # 如果澄清问题已生成但用户未提供澄清，则不应直接进入工具执行或写作
-            # 理想情况下，这里应该有一个分支逻辑，如果澄清问题存在且无答案，则图应该结束并返回问题
-            # 但由于 `should_continue` 主要控制工具执行循环，我们将允许它进入plan_analysis
-            # plan_analysis 和 master_plan 会基于有无澄清信息来调整行为
-            pass
+        """判断是否继续执行"""
+        current_step_index = state.get("current_step", 0)
+        max_steps = len(state.get("execution_plan", []))
 
+        if current_step_index >= max_steps:
+            logging.info("✅ 所有计划内步骤已执行完成，结束执行并生成报告。")
+            return "end_report"
+        
+        if current_step_index >= state.get("max_iterations", 10):
+            logging.info("🛑 达到最大迭代次数，结束执行并生成报告。")
+            return "end_report"
+        
+        # 每 3 步总结一次历史
+        if current_step_index > 0 and current_step_index % 3 == 0:
+            logging.info(" ciclo de resumo de 3 etapas")
+            return "summarize"
 
-        current_step = state.get("current_step", 0)
-        execution_plan = state.get("execution_plan", [])
-        execution_memory = state.get("execution_memory", [])
-        max_iterations = state.get("max_iterations", 10)
-        
-        # 检查是否达到最大迭代次数
-        if len(execution_memory) >= max_iterations:
-            logging.info(f"达到最大工具执行次数 ({max_iterations})，进入写作阶段") # 更新日志消息
-            return "write_introduction"
-        
-        # 检查是否还有步骤要执行
-        if current_step < len(execution_plan):
-            return "execute_step"
-        
-        # 检查是否收集到足够的信息
-        arxiv_papers = state.get("arxiv_papers", [])
-        web_results = state.get("web_search_results", [])
-        
-        logging.info(f"当前收集情况: {len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果")
-        
-        # 如果已经收集到足够的信息，进入写作阶段
-        if len(arxiv_papers) >= 3 or len(web_results) >= 3:
-            logging.info("已收集到足够信息，进入写作阶段")
-            return "write_introduction"
-        
-        # 检查最近的执行结果
-        recent_results = execution_memory[-3:] if len(execution_memory) >= 3 else execution_memory
-        successful_results = [r for r in recent_results if r.get("success", False)]
-        
-        # 如果最近的结果都不成功，重新规划
-        if len(successful_results) < len(recent_results) * 0.3:
-            logging.info("最近执行结果不理想，重新规划...")
-            state["current_step"] = 0
-            return "plan_analysis"
-        
-        # 如果执行了一轮但信息不足，继续规划
-        if len(arxiv_papers) < 3 and len(web_results) < 3:
-            logging.info("信息收集不足，继续规划...")
-            state["current_step"] = 0
-            return "plan_analysis"
-        
-        # 默认进入写作阶段
-        return "write_introduction"
-    
-    
-    
-    def _build_workflow(self) -> StateGraph: # This method uses _decide_after_clarification
-        """构建工作流图"""
+        return "continue"
+
+    def _build_workflow(self) -> CompiledStateGraph:
+        """构建并编译LangGraph工作流"""
         workflow = StateGraph(ProposalState)
-        
-        # 添加节点
-        workflow.add_node("clarify_research_focus", self.clarify_research_focus_node) 
+
+        # 1. 定义所有节点
+        workflow.add_node("clarify_focus", self.clarify_research_focus_node)
         workflow.add_node("create_master_plan", self.create_master_plan_node)
         workflow.add_node("plan_analysis", self.plan_analysis_node)
         workflow.add_node("execute_step", self.execute_step_node)
+        workflow.add_node("summarize_history", self.summarize_history_node) # 短期记忆节点
+        workflow.add_node("add_references", self.add_references_from_data)
+
+        # 报告生成节点
         workflow.add_node("write_introduction", self.write_introduction_node)
         workflow.add_node("write_literature_review", self.write_literature_review_node)
         workflow.add_node("write_research_design", self.write_research_design_node)
-        workflow.add_node("write_conclusion", self.write_conclusion_node) 
+        workflow.add_node("write_conclusion", self.write_conclusion_node)
         workflow.add_node("generate_final_references", self.generate_final_references_node)
-        workflow.add_node("generate_final_report", self.generate_final_report_node) 
-        
-        # 定义流程
-        workflow.set_entry_point("clarify_research_focus") 
-        
-        # Conditional edge after clarification
+        workflow.add_node("generate_final_report", self.generate_final_report_node)
+        workflow.add_node("save_memory", self.save_to_long_term_memory_node) # 长期记忆节点
+
+        # 2. 设置图的入口点
+        workflow.set_entry_point("clarify_focus")
+
+        # 3. 定义图的边（流程）
         workflow.add_conditional_edges(
-            "clarify_research_focus",
-            self._decide_after_clarification, # This is where the method is called
+            "clarify_focus",
+            self._decide_after_clarification,
             {
-                "end_for_user_input": END, 
+                "end_for_user_input": END,
                 "proceed_to_master_plan": "create_master_plan"
             }
         )
         
         workflow.add_edge("create_master_plan", "plan_analysis")
         
-        # 条件边：根据执行情况决定下一步
-        workflow.add_conditional_edges(
-            "plan_analysis",
-            lambda state: "execute_step",  
-            {"execute_step": "execute_step"}
-        )
+        # 生成计划后，直接进入执行
+        workflow.add_edge("plan_analysis", "execute_step")
         
+        # 核心执行循环
         workflow.add_conditional_edges(
             "execute_step",
-            self.should_continue,  
+            self.should_continue,
             {
-                "execute_step": "execute_step",  
-                "plan_analysis": "plan_analysis",  
-                "write_introduction": "write_introduction" 
+                "continue": "execute_step", # <-- 核心修改：直接返回执行下一步
+                "summarize": "summarize_history",
+                "end_report": "add_references" # 结束循环，开始整合报告
             }
         )
         
+        # 短期记忆循环
+        workflow.add_edge("summarize_history", "execute_step") # <-- 核心修改：摘要后返回执行下一步
+
+        # 报告生成流程
+        workflow.add_edge("add_references", "write_introduction")
         workflow.add_edge("write_introduction", "write_literature_review")
         workflow.add_edge("write_literature_review", "write_research_design")
-        workflow.add_edge("write_research_design", "write_conclusion") 
-        workflow.add_edge("write_conclusion", "generate_final_references") 
-        workflow.add_edge("generate_final_references", "generate_final_report") 
-        workflow.add_edge("generate_final_report", END) 
-        
-        return workflow.compile() 
-    
+        workflow.add_edge("write_research_design", "write_conclusion")
+        workflow.add_edge("write_conclusion", "generate_final_references")
+        workflow.add_edge("generate_final_references", "generate_final_report")
 
-    def generate_proposal(self, research_field: str, user_clarifications: str = "") -> Dict[str, Any]:
-        """生成研究计划书"""
-        initial_state = ProposalState(
-            research_field=research_field,
-            user_clarifications=user_clarifications, # 新增：接收用户澄清
-            clarification_questions=[], # 新增：初始化澄清问题列表
-            query="",
-            arxiv_papers=[],
-            web_search_results=[],
-            background="",
-            objectives="",
-            methodology="",
-            timeline="",
-            expected_outcomes="",
-            final_proposal="",
-            messages=[],
-            research_plan="",
-            available_tools=[],
-            execution_plan=[],
-            execution_memory=[],
-            current_step=0,
-            max_iterations=10,
-            introduction="",
-            literature_review="",
-            research_design="",
-            timeline_plan="",
-            expected_results="",
-            reference_list=[],  # 初始化统一参考文献列表
-            ref_counter=1,      # 初始化参考文献计数器
-            final_references="", 
-            conclusion="",       
-            final_report_markdown="" # 初始化最终报告字段
-        )
+        # 最后，保存到长期记忆并结束
+        workflow.add_edge("generate_final_report", "save_memory")
+        workflow.add_edge("save_memory", END)
         
-        logging.info(f"🚀 开始处理研究问题: '{research_field}'")
-        result = self.workflow.invoke(initial_state)
+        # 4. 编译图
+        return workflow.compile(checkpointer=MemorySaver())
+
+
+    def generate_proposal(self, research_field: str, proposal_id: str, user_clarifications: str = "") -> Dict[str, Any]:
+        """生成一个完整的研究计划书"""
+        if not proposal_id:
+            proposal_id = f"proposal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # 配置线程（任务），这是使用Checkpointer所必需的
+        config = {"configurable": {"thread_id": proposal_id}}
+
+        initial_state = {
+            "research_field": research_field,
+            "user_clarifications": user_clarifications,
+            "proposal_id": proposal_id,
+            # 初始化其他状态字段，以避免KeyError
+            "query": "",
+            "arxiv_papers": [],
+            "web_search_results": [],
+            "background": "",
+            "objectives": "",
+            "methodology": "",
+            "timeline": "",
+            "expected_outcomes": "",
+            "final_proposal": "",
+            "messages": [],
+            "research_plan": "",
+            "available_tools": [],
+            "execution_plan": [],
+            "execution_memory": [],
+            "history_summary": "",
+            "current_step": 0,
+            "max_iterations": 10,
+            "introduction": "",
+            "literature_review": "",
+            "research_design": "",
+            "timeline_plan": "",
+            "expected_results": "",
+            "reference_list": [],
+            "ref_counter": 0,
+            "final_references": "",
+            "conclusion": "",
+            "final_report_markdown": "",
+            "clarification_questions": [],
+        }
+
+        logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
+        # 调用invoke时传入config
+        result = self.workflow.invoke(initial_state, config=config)
+        
+        # 提取澄清问题，如果它们是调用的直接结果
+        clarification_questions = result.get("clarification_questions", [])
+        if clarification_questions:
+            logging.info(" agent生成澄清问题，等待用户输入")
+            return {"clarification_questions": clarification_questions}
+
+        # 如果没有澄清问题，或者流程已经完成，则返回最终结果
         return result
+
+    def summarize_history_node(self, state: ProposalState) -> ProposalState:
+        """回顾执行历史并生成摘要"""
+        logging.info("🧠 开始生成执行历史摘要...")
+        
+        execution_memory = state.get("execution_memory", [])
+        if not execution_memory:
+            return state # 如果没有历史，则跳过
+
+        # 将历史记录格式化为文本
+        memory_text = "\n".join([
+            f"- 步骤: {mem.get('description', 'N/A')}, "
+            f"结果: {'成功' if mem.get('success') else '失败'}, "
+            f"详情: {str(mem.get('result', ''))[:150]}..."
+            for mem in execution_memory
+        ])
+
+        prompt = f"""
+        请根据以下任务执行历史，生成一段简洁、精炼的摘要。
+        摘要需要捕捉到目前为止的关键发现、遇到的主要障碍或失败，以及尚未解决的核心问题。
+        这将作为后续规划的唯一上下文，所以请确保信息的准确性和完整性。
+
+        原始研究问题: {state['research_field']}
+        当前研究计划: {state['research_plan']}
+
+        执行历史:
+        {memory_text}
+
+        请输出摘要:
+        """
+        
+        response = self.llm.invoke([SystemMessage(content=prompt)])
+        summary = response.content.strip()
+        
+        state["history_summary"] = summary
+        logging.info(f"✅ 生成摘要完成: {summary[:200]}...")
+        
+        return state
+
+    def save_to_long_term_memory_node(self, state: ProposalState) -> ProposalState:
+        """将最终报告的核心洞察存入长期记忆"""
+        logging.info("💾 正在将本次研究成果存入长期记忆...")
+        
+        proposal_id = state.get("proposal_id")
+        if not proposal_id:
+            logging.warning("⚠️ proposal_id 不存在，无法存入长期记忆。")
+            return state
+
+        # 生成一个用于存储的文档
+        document_to_store = f"""
+        研究课题: {state.get('research_field')}
+        用户澄清: {state.get('user_clarifications', '无')}
+        最终研究计划摘要: {state.get('research_plan', '')[:500]}...
+        引言核心: {state.get('introduction', '')[:500]}...
+        文献综述要点: {state.get('literature_review', '')[:500]}...
+        最终结论: {state.get('conclusion', '')[:500]}...
+        """
+        
+        try:
+            self.long_term_memory.add_texts(
+                texts=[document_to_store],
+                metadatas=[{"proposal_id": proposal_id, "timestamp": datetime.now().isoformat()}],
+                ids=[proposal_id] # 使用 proposal_id 作为唯一标识
+            )
+            # ChromaDB in-memory with persist_directory handles saving automatically on updates.
+            # self.long_term_memory.persist() # 显式调用 persist() 可能不是必需的，但可以确保写入
+            logging.info(f"✅ 成功将 proposal_id '{proposal_id}' 存入长期记忆。")
+        except Exception as e:
+            logging.error(f"❌ 存入长期记忆失败: {e}")
+        
+        return state
