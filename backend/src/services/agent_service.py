@@ -1,13 +1,13 @@
 from backend.src.agent.graph import ProposalAgent
 import os
 
-def agent_service(research_question: str, uuid : str):
+def agent_service(research_question: str, proposal_id : str):
     # 测试PDF摘要功能
     # pdf_result = summarize_pdf.invoke({"path": "./Papers/test.pdf"})
     # print("PDF摘要测试:", pdf_result)
 
     agent = ProposalAgent()
-    result = agent.generate_proposal(research_question, uuid)
+    result = agent.generate_proposal(research_question, proposal_id)
     print("\n" + "=" * 60)
     # print("计划:")
     # print(result["research_plan"])

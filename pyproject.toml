@@ -16,5 +16,5 @@ dependencies = [
     "pyyaml>=6.0.2",
     "reportlab>=4.4.1",
     "sse-starlette>=2.3.6",
-    "uvicorn>=0.34.3",
+    "uvicorn[standard]>=0.34.3",
 ]
