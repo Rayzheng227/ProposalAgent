@@ -17,6 +17,10 @@ if __name__ == "__main__":
     # print("PDF摘要测试:", pdf_result)
     
     agent = ProposalAgent()
+# <<<<<<< wyy-RAG
+#     research_question = "大模型的推理优化"
+#     result = agent.generate_proposal(research_question, "demo_test")
+# =======
     research_question = input("请输入研究问题（Research Question）：")
     
     # 第一次调用，可能生成澄清问题
@@ -38,6 +42,7 @@ if __name__ == "__main__":
         print("\n🔄 正在根据您的澄清重新规划研究...\n")
         result = agent.generate_proposal(research_question, user_clarifications=user_clarifications, proposal_id="demo_test")
 
+# >>>>>>> main
     print("\n" + "="*60)
     # print("计划:")
     # print(result["research_plan"])

@@ -791,27 +791,71 @@ class ProposalAgent:
         return state
 
     def should_continue(self, state: ProposalState) -> str:
-        """判断是否继续执行"""
-        current_step_index = state.get("current_step", 0)
-        max_steps = len(state.get("execution_plan", []))
+        """决定是否继续执行或进入写作阶段"""
+        # 新增：如果刚生成了澄清问题且用户尚未回应，则应提示用户回应
+        if state.get("clarification_questions") and not state.get("user_clarifications"):
+            # 在实践中，图应该在此处暂停或结束，等待用户输入。
+            # 对于当前单次调用模型，我们将允许其继续，但总体规划会受影响。
+            # 或者，可以设计一个特殊的结束状态，提示需要用户输入。
+            # 为简单起见，我们让它继续，但总体规划可能不够聚焦。
+            # 一个更好的方法是，如果clarification_questions存在，则在此处返回一个特殊信号
+            # 让调用者知道需要用户输入。但当前langgraph的should_continue通常用于工具执行循环。
+            # logging.info("⏳ 等待用户对澄清问题的回应。继续当前流程，但建议提供澄清以获得更佳结果。")
+            # 如果澄清问题已生成但用户未提供澄清，则不应直接进入工具执行或写作
+            # 理想情况下，这里应该有一个分支逻辑，如果澄清问题存在且无答案，则图应该结束并返回问题
+            # 但由于 `should_continue` 主要控制工具执行循环，我们将允许它进入plan_analysis
+            # plan_analysis 和 master_plan 会基于有无澄清信息来调整行为
+            pass
 
-        if current_step_index >= max_steps:
-            logging.info("✅ 所有计划内步骤已执行完成，结束执行并生成报告。")
-            return "end_report"
+
+        current_step = state.get("current_step", 0)
+        execution_plan = state.get("execution_plan", [])
+        execution_memory = state.get("execution_memory", [])
+        max_iterations = state.get("max_iterations", 10)
         
-        if current_step_index >= state.get("max_iterations", 10):
-            logging.info("🛑 达到最大迭代次数，结束执行并生成报告。")
-            return "end_report"
+        # 检查是否达到最大迭代次数
+        if len(execution_memory) >= max_iterations:
+            logging.info(f"达到最大工具执行次数 ({max_iterations})，进入写作阶段") # 更新日志消息
+            return "write_introduction"
         
-        # 每 1 步总结一次历史
-        if current_step_index > 0 and current_step_index % 1 == 0:
-            logging.info("📝 正在为上一步生成摘要...")
-            return "summarize"
-
-        return "continue"
-
-    def _build_workflow(self) -> CompiledStateGraph:
-        """构建并编译LangGraph工作流"""
+        # 检查是否还有步骤要执行
+        if current_step < len(execution_plan):
+            return "execute_step"
+        
+        # 检查是否收集到足够的信息
+        arxiv_papers = state.get("arxiv_papers", [])
+        web_results = state.get("web_search_results", [])
+        
+        logging.info(f"当前收集情况: {len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果")
+        
+        # 如果已经收集到足够的信息，进入写作阶段
+        if len(arxiv_papers) >= 3 or len(web_results) >= 3:
+            logging.info("已收集到足够信息，进入写作阶段")
+            return "write_introduction"
+        
+        # 检查最近的执行结果
+        recent_results = execution_memory[-3:] if len(execution_memory) >= 3 else execution_memory
+        successful_results = [r for r in recent_results if r.get("success", False)]
+        
+        # 如果最近的结果都不成功，重新规划
+        if len(successful_results) < len(recent_results) * 0.3:
+            logging.info("最近执行结果不理想，重新规划...")
+            state["current_step"] = 0
+            return "plan_analysis"
+        
+        # 如果执行了一轮但信息不足，继续规划
+        if len(arxiv_papers) < 3 and len(web_results) < 3:
+            logging.info("信息收集不足，继续规划...")
+            state["current_step"] = 0
+            return "plan_analysis"
+        
+        # 默认进入写作阶段
+        return "write_introduction"
+    
+    
+    
+    def _build_workflow(self) -> StateGraph: # This method uses _decide_after_clarification
+        """构建工作流图"""
         workflow = StateGraph(ProposalState)
 
         # 1. 定义所有节点

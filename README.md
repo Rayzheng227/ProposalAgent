@@ -23,10 +23,7 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 
 # Requirements
 - `python>=3.10`
-- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)
-- 新增依赖:
-  - `langchain-chroma`
-  - `sentence-transformers`
+- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)、
 
 # Installation
 1. Clone the repository
@@ -57,9 +54,6 @@ uv run agent.py
 
 - 2025.6.9 : Merging from wyy: 后端接口以及对tools的优化
 
-- 2024.6.10 : 新增长短期记忆系统：为 Agent 集成了完整的长短期记忆机制。
-  - **短期记忆**：通过会话内摘要，有效压缩了长任务的上下文，降低了 Token 消耗。
-  - **长期记忆**：通过 ChromaDB 向量数据库，实现了知识的跨会话存储与检索，使 Agent 能够从历史任务中学习。
 ----
 
 # 写给队友看的一些临时的想法

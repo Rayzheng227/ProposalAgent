@@ -7,18 +7,14 @@ requires-python = ">=3.10"
 dependencies = [
     "arxiv>=2.2.0",
     "crossrefapi>=1.6.0",
-<<<<<<< HEAD
-=======
     "fastapi>=0.115.12",
->>>>>>> 18b39b2... feat: 短期/长期记忆模块集成
     "langchain>=0.3.25",
     "langchain-community>=0.3.24",
     "langchain-openai>=0.3.19",
     "langgraph>=0.4.8",
     "pymupdf>=1.26.0",
-<<<<<<< HEAD
     "reportlab>=4.4.1",
-=======
+    "pyyaml>=6.0.2",
     "pyyaml>=6.0.2",
     "reportlab>=4.4.1",
     "sse-starlette>=2.3.6",
@@ -26,5 +22,6 @@ dependencies = [
     "langchain-chroma>=0.1.2",
     "sentence-transformers>=3.0.1",
     "langchain-huggingface>=0.0.3",
->>>>>>> 18b39b2... feat: 短期/长期记忆模块集成
+    "sse-starlette>=2.3.6",
+    "uvicorn>=0.34.3",
 ]
