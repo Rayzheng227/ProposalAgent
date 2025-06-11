@@ -1,6 +1,8 @@
 """
 Agent生成过程中的图相关：节点
 """
+import time
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -19,27 +21,37 @@ import logging
 from backend.src.agent.prompts import * # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
-from .tools import search_arxiv_papers_tool,search_crossref_papers_tool,search_web_content_tool,summarize_pdf
+from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf
 from .state import ProposalState
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-
+from backend.src.utils.queue_util import QueueUtil
+from backend.src.utils.stream_mes_util import stream_mes_2_full_content
+from ..entity.stream_mes import StreamMes
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
 base_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 输出到控制台
+    ]
+)
+
+
 class ProposalAgent:
     def __init__(self):
         """初始化ProposalAgent"""
         self.llm = ChatOpenAI(
-            api_key= DASHSCOPE_API_KEY,
+            api_key=DASHSCOPE_API_KEY,
             model="qwen-plus",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            temperature=0
+            temperature=0,
+            streaming=True,  # 统一为流式输出
         )
-        
+
         # 设置Tavily API密钥
         # os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
@@ -57,7 +69,6 @@ class ProposalAgent:
         
         self.workflow = self._build_workflow()
 
-    
     def load_tools_description(self) -> List[Dict]:
         """从JSON文件加载工具描述"""
         current_script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -72,22 +83,21 @@ class ProposalAgent:
         except json.JSONDecodeError:
             print("警告: tools.json 文件格式错误，使用默认工具描述")
             return []
-        
 
     def get_tools_info_text(self) -> str:
         """将工具信息转换为文本描述"""
         if not self.tools_description:
             return "暂无可用工具信息"
-        
+
         tools_text = "可用工具列表:\n\n"
         for tool_info in self.tools_description:
             func_info = tool_info.get("function", {})
             name = func_info.get("name", "未知工具")
             description = func_info.get("description", "无描述")
-            
+
             tools_text += f"🔧 **{name}**\n"
             tools_text += f"   描述: {description}\n"
-            
+
             # 添加参数信息
             params = func_info.get("parameters", {}).get("properties", {})
             if params:
@@ -98,9 +108,9 @@ class ProposalAgent:
                     required = param_name in func_info.get("parameters", {}).get("required", [])
                     required_text = "必需" if required else "可选"
                     tools_text += f"     - {param_name} ({param_type}, {required_text}): {param_desc}\n"
-            
+
             tools_text += "\n"
-        
+
         return tools_text
     
 
@@ -266,7 +276,10 @@ class ProposalAgent:
         )
         
         logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清和历史知识) 制定总体研究计划...")
-        response = self.llm.invoke([HumanMessage(content=final_prompt)])
+        full_content = stream_mes_2_full_content(state["proposal_id"], 1,
+                                                 self.llm.stream([HumanMessage(content=master_planning_prompt)]))
+        state["research_plan"] = full_content
+        # response = self.llm.invoke([HumanMessage(content=final_prompt)])
         
         state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
@@ -330,28 +343,29 @@ class ProposalAgent:
             memory_text=memory_text
         )
         logging.info("🔍 Agent正在分析计划并生成执行步骤...")
-        response = self.llm.invoke([HumanMessage(content=plan_analysis_prompt)])
+        full_content = stream_mes_2_full_content(state["proposal_id"], 2,
+                                                 self.llm.stream([HumanMessage(content=plan_analysis_prompt)]))
         # logging.info("生成计划", response.content)
         try:
             # 解析JSON响应
-            response_text = response.content.strip()
-           # 如果响应包含```json，则提取JSON部分
-            if "```json" in response_text:
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
+            full_content = full_content.strip()
+            # 如果响应包含```json，则提取JSON部分
+            if "```json" in full_content:
+                start = full_content.find("```json") + 7
+                end = full_content.find("```", start)
                 if end != -1:
-                    response_text = response_text[start:end].strip()
-            elif "```" in response_text:
-                start = response_text.find("```") + 3
-                end = response_text.find("```", start)
+                    full_content = full_content[start:end].strip()
+            elif "```" in full_content:
+                start = full_content.find("```") + 3
+                end = full_content.find("```", start)
                 if end != -1:
-                    response_text = response_text[start:end].strip()
-            
-            plan_data = json.loads(response_text)
+                    full_content = full_content[start:end].strip()
+
+            plan_data = json.loads(full_content)
             state["execution_plan"] = plan_data.get("steps", [])
         except json.JSONDecodeError:
             logging.error("无法解析执行计划JSON，使用默认计划")
-            logging.error(f"原始响应: {response.content[:500]}...")
+            logging.error(f"原始响应: {full_content}...")
             # 默认执行计划
             state["execution_plan"] = [
                 {
@@ -362,7 +376,7 @@ class ProposalAgent:
                     "expected_outcome": "找到相关的学术论文"
                 }
             ]
-        
+
         logging.info(f"✅ 生成了 {len(state['execution_plan'])} 个执行步骤")
 
         return state
@@ -446,14 +460,14 @@ class ProposalAgent:
         web_results = state.get("web_search_results", [])
         reference_list = state.get("reference_list", [])
         ref_counter = state.get("ref_counter", 1)
-        
+
         # 处理ArXiv论文
         for paper in arxiv_papers:
             if "error" not in paper:
                 # 检查是否已经存在
                 paper_title = paper.get('title', 'Unknown')
                 existing_ref = next((ref for ref in reference_list if ref.get('title') == paper_title), None)
-                
+
                 if not existing_ref:
                     reference_list.append({
                         "id": ref_counter,
@@ -466,13 +480,13 @@ class ProposalAgent:
                         "summary": paper.get('detailed_summary', paper.get('summary', ''))  # 优先使用详细摘要
                     })
                     ref_counter += 1
-        
+
         # 处理网络搜索结果和CrossRef结果
         for result in web_results:
             if "error" not in result:
                 result_title = result.get('title', result.get('url', 'Unknown'))
                 existing_ref = next((ref for ref in reference_list if ref.get('title') == result_title), None)
-                
+
                 if not existing_ref:
                     # 区分CrossRef和普通Web结果
                     if result.get('doi'):  # CrossRef结果
@@ -495,22 +509,23 @@ class ProposalAgent:
                             "content_preview": result.get('content', result.get('snippet', 'No content'))[:200]
                         })
                     ref_counter += 1
-        
+
         state["reference_list"] = reference_list
         state["ref_counter"] = ref_counter
-        
+        QueueUtil.push_mes(
+            StreamMes(state["proposal_id"], 3, f"\n✅ 成功处理下载的参考论文/网页资源"))
+
         return state
-    
-    def get_literature_summary_with_refs(self, state: ProposalState) -> str:
+
+    def get_literature_summary_with_refs(self, state: ProposalState, step: int) -> str:
         """获取带有统一编号的文献摘要"""
         reference_list = state.get("reference_list", [])
-        
         literature_summary = ""
-        
+
         # 按类型分组显示
         arxiv_refs = [ref for ref in reference_list if ref.get("type") == "ArXiv"]
         web_refs = [ref for ref in reference_list if ref.get("type") == "Web"]
-        
+
         if arxiv_refs:
             literature_summary += "\n\n**相关Arxiv论文：**\n"
             for ref in arxiv_refs:
@@ -519,25 +534,26 @@ class ProposalAgent:
                 literature_summary += f"   发表时间: {ref['published']}\n"
                 literature_summary += f"   摘要: {ref['summary']}\n"
                 literature_summary += f"   分类: {', '.join(ref['categories'])}\n\n"
-        
+
         if web_refs:
             literature_summary += "\n**相关网络信息：**\n"
             for ref in web_refs:
                 literature_summary += f"[{ref['id']}] {ref['title']}\n"
                 literature_summary += f"   来源: {ref['url']}\n"
                 literature_summary += f"   内容摘要: {ref['content_preview']}...\n\n"
-        
+
+        QueueUtil.push_mes(StreamMes(state["proposal_id"], step, "\n✅ 成功生成引用编号\n"))
         return literature_summary
-    
+
     def generate_reference_section(self, state: ProposalState) -> str:
         """生成格式化的参考文献部分"""
         reference_list = state.get("reference_list", [])
-        
+
         if not reference_list:
             return ""
-        
+
         ref_text = "\n\n## 参考文献\n\n"
-        
+
         for ref in reference_list:
             if ref["type"] == "ArXiv":
                 # ArXiv论文格式
@@ -554,17 +570,19 @@ class ProposalAgent:
             elif ref["type"] == "Web":
                 # 网络资源格式
                 ref_text += f"[{ref['id']}] {ref['title']}. 访问时间: {datetime.now().strftime('%Y-%m-%d')}. URL: {ref['url']}\n\n"
-        
+
+        QueueUtil.push_mes(
+            StreamMes(state["proposal_id"], 8, "\n✅ 成功生成参考文献"))
         return ref_text
 
     def write_introduction_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的引言部分"""
         research_field = state["research_field"]
         research_plan = state["research_plan"]
-        
+
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state)
-        
+        literature_summary = self.get_literature_summary_with_refs(state, step=4)
+
         citation_instruction = """
         **引用要求：**
         1. 当提及相关研究或观点时，必须在句末添加引用标记，格式为 [编号]
@@ -573,7 +591,7 @@ class ProposalAgent:
         4. 不要编造不存在的引用，只能引用上述提供的文献
         5. 如果某个观点来自多个文献，可以使用 [1,2] 的格式
         """
-        
+
         # 使用prompts.py中的instruction
         introduction_prompt = f"""
         {proposal_introduction_instruction}
@@ -598,14 +616,14 @@ class ProposalAgent:
         6. **不要在引言部分包含参考文献列表**，只在正文中使用引用标记
         7. 使用`# 引言`作为开头
         """
-        
+
         logging.info("📝 正在生成研究计划书引言部分...")
-        response = self.llm.invoke([HumanMessage(content=introduction_prompt)])
-        
+        full_content = stream_mes_2_full_content(state["proposal_id"], 4,
+                                                 self.llm.stream([HumanMessage(content=introduction_prompt)]))
         # 只保存引言正文，不包含参考文献
-        state["introduction"] = response.content
+        state["introduction"] = full_content
         logging.info("✅ 引言部分生成完成")
-        
+
         return state
 
     def write_literature_review_node(self, state: ProposalState) -> ProposalState:
@@ -613,10 +631,10 @@ class ProposalAgent:
         research_field = state["research_field"]
         research_plan = state["research_plan"]
         introduction_content = state.get("introduction", "")
-        
+
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state)
-        
+        literature_summary = self.get_literature_summary_with_refs(state, step=5)
+
         # 生成引用指导
         citation_instruction = """
         **引用要求：**
@@ -639,7 +657,7 @@ class ProposalAgent:
         5. 确保文献综述的结论自然过渡到对拟议研究的必要性论证
         6. 对引言中提及的关键概念和理论进行更深入的文献分析
         """
-        
+
         # 使用prompts.py中的LITERATURE_REVIEW_PROMPT
         literature_review_prompt = f"""
         {LITERATURE_REVIEW_PROMPT.format(research_field=research_field)}
@@ -673,14 +691,14 @@ class ProposalAgent:
         9. **与引言部分保持连贯性**，避免重复内容，深化引言中的研究问题
         10. 使用承接性语言连接引言部分的内容
         """
-        
+
         logging.info("📚 正在生成研究计划书文献综述部分...")
-        response = self.llm.invoke([HumanMessage(content=literature_review_prompt)])
-        
+        full_content = stream_mes_2_full_content(state["proposal_id"], 5,
+                                                 self.llm.stream([HumanMessage(content=literature_review_prompt)]))
         # 注意：文献综述不重复添加参考文献部分，因为引言已经包含了完整的参考文献列表
-        state["literature_review"] = response.content
+        state["literature_review"] = full_content
         logging.info("✅ 文献综述部分生成完成")
-        
+
         return state
 
     def write_research_design_node(self, state: ProposalState) -> ProposalState:
@@ -689,10 +707,10 @@ class ProposalAgent:
         research_plan = state["research_plan"]
         introduction_content = state.get("introduction", "")
         literature_review_content = state.get("literature_review", "")
-        
+
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state)
-        
+        literature_summary = self.get_literature_summary_with_refs(state, step=6)
+
         # 生成引用指导
         citation_instruction = """
         **引用要求：**
@@ -714,7 +732,7 @@ class ProposalAgent:
         5. 确保研究设计的每个组成部分都与前文建立的研究背景和理论基础相呼应
         6. 明确说明为什么选择的方法适合解决引言中提出的研究问题
         """
-        
+
         # 使用prompts.py中的PROJECT_DESIGN_PROMPT
         research_design_prompt = f"""
         {PROJECT_DESIGN_PROMPT.format(research_field=research_field)}
@@ -742,15 +760,15 @@ class ProposalAgent:
         必须**使用中文撰写**
         **不要包含时间安排或预期成果总结，这些将在结论部分统一阐述。**
         """
-        
-        logging.info("🔬 正在生成研究计划书研究设计部分...")
-        response = self.llm.invoke([HumanMessage(content=research_design_prompt)])
-        
-        state["research_design"] = response.content
-        logging.info("✅ 研究设计部分生成完成")
-        
-        return state
 
+        logging.info("🔬 正在生成研究计划书研究设计部分...")
+        full_content = stream_mes_2_full_content(state["proposal_id"], 6,
+                                                 self.llm.stream([HumanMessage(content=research_design_prompt)]))
+
+        state["research_design"] = full_content
+        logging.info("✅ 研究设计部分生成完成")
+
+        return state
 
     def write_conclusion_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的结论部分"""
@@ -758,7 +776,7 @@ class ProposalAgent:
         introduction_content = state.get("introduction", "")
         literature_review_content = state.get("literature_review", "")
         research_design_content = state.get("research_design", "")
-        
+
         conclusion_prompt_text = f"""
         {CONCLUSION_PROMPT.format(research_field=research_field)}
 
@@ -778,77 +796,79 @@ class ProposalAgent:
         确保结论与前面章节提出的研究问题、方法论和目标保持一致。
         必须使用**中文**撰写
         """
-        
-        logging.info("📜 正在生成研究计划书结论部分...")
-        response = self.llm.invoke([HumanMessage(content=conclusion_prompt_text)])
-        
-        state["conclusion"] = response.content
-        logging.info("✅ 结论部分生成完成")
-        
-        return state
 
+        logging.info("📜 正在生成研究计划书结论部分...")
+        full_content = stream_mes_2_full_content(state["proposal_id"], 7,
+                                                 self.llm.stream([HumanMessage(content=conclusion_prompt_text)]))
+        state["conclusion"] = full_content
+        logging.info("✅ 结论部分生成完成")
+
+        return state
 
     def generate_final_references_node(self, state: ProposalState) -> ProposalState:
         """生成最终的参考文献部分"""
         reference_section = self.generate_reference_section(state)
-        
+
         # 将参考文献作为独立部分保存
         state["final_references"] = reference_section
         logging.info("✅ 参考文献部分生成完成")
-        
+
         return state
 
     def generate_final_report_node(self, state: ProposalState) -> ProposalState:
-        """生成最终报告的Markdown格式内容"""
-        logging.info("✍️ 开始生成最终的研究计划书...")
-        
+        """生成最终的Markdown研究计划书报告"""
+        start_timestamp = time.time()
+        QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "正在生成最终研究计划报告~"))
+        logging.info("📄 正在生成最终的研究计划书Markdown报告...")
+
         research_field = state.get("research_field", "未知领域")
         introduction = state.get("introduction", "无引言内容")
         literature_review = state.get("literature_review", "无文献综述内容")
         research_design = state.get("research_design", "无研究设计内容")
         conclusion = state.get("conclusion", "无结论内容")
         final_references = state.get("final_references", "无参考文献")
-        
+
         research_plan = state.get("research_plan", "无初始研究计划")
         execution_memory = state.get("execution_memory", [])
-        
+
         # 创建output文件夹
         output_dir = "./output"
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-            
+
         # 用uuid替换时间戳
         uuid = state["proposal_id"]
-        #timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_research_field = "".join(c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_research_field = "".join(
+            c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
         report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
         report_filepath = os.path.join(output_dir, report_filename)
-        
+
         # 构建Markdown内容
         report_content = f"# 研究计划书：{research_field}\n\n"
-        
+
         # report_content += "## 1. 引言\n\n"
         report_content += f"{introduction}\n\n"
-        
+
         # report_content += "## 2. 文献综述\n\n"
         report_content += f"{literature_review}\n\n"
-        
+
         # report_content += "## 3. 研究设计与方法\n\n"
         report_content += f"{research_design}\n\n"
-        
+
         # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
         report_content += f"{conclusion}\n\n"
-        
-        report_content += f"{final_references}\n\n" # 参考文献部分自带 "## 参考文献" 标题
-        
+
+        report_content += f"{final_references}\n\n"  # 参考文献部分自带 "## 参考文献" 标题
+
         report_content += "---\n"
         report_content += "## 附录：过程资料\n\n"
-        
+
         report_content += "### A.1 初始研究计划\n\n"
         report_content += "```markdown\n"
         report_content += f"{research_plan}\n"
         report_content += "```\n\n"
-        
+
         report_content += "### A.2 执行步骤记录\n\n"
         if execution_memory:
             for i, step_memory in enumerate(execution_memory):
@@ -856,24 +876,28 @@ class ProposalAgent:
                 desc = step_memory.get("description", "无描述")
                 res = step_memory.get("result", "无结果")
                 success_status = "成功" if step_memory.get("success") else "失败"
-                report_content += f"**步骤 {i+1}: {desc}** ({action})\n"
+                report_content += f"**步骤 {i + 1}: {desc}** ({action})\n"
                 report_content += f"- 状态: {success_status}\n"
                 report_content += f"- 结果摘要: {str(res)[:150]}...\n\n"
         else:
             report_content += "无执行记录。\n\n"
-            
+
         report_content += "### A.3 收集的文献与信息摘要\n\n"
-        report_content += self.get_literature_summary_with_refs(state) + "\n\n"
+        report_content += self.get_literature_summary_with_refs(state, 9) + "\n\n"
 
         try:
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 f.write(report_content)
             logging.info(f"✅ 最终报告已保存到: {report_filepath}")
             state["final_report_markdown"] = report_content
+            QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "\n✅ 报告生成完毕"))
+            # 结束标记
+            QueueUtil.push_mes(StreamMes(state['proposal_id'], 0, ""))
         except Exception as e:
             logging.error(f"❌ 保存最终报告失败: {e}")
             state["final_report_markdown"] = "报告生成失败"
-            
+            QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "\n❌  报告生成失败"))
+
         return state
 
     def should_continue(self, state: ProposalState) -> str:

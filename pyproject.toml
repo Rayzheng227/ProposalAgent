@@ -24,4 +24,5 @@ dependencies = [
     "langchain-huggingface>=0.0.3",
     "sse-starlette>=2.3.6",
     "uvicorn>=0.34.3",
+    "uvicorn[standard]>=0.34.3",
 ]
