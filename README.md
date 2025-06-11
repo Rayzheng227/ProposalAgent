@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/Logo.png" alt="ProposalAgent" style="height: 12em" />
+  <img src="media/Logo.png" alt="ProposalAgent" style="height: 17em" />
 </p>
 
 <p align="center">
