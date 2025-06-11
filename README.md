@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="media/ProposalAgent_logo.png" alt="ProposalAgent" style="height: 12em" />
+  <img src="media/Logo.png" alt="ProposalAgent" style="height: 12em" />
 </p>
 
 <p align="center">
-  <strong>A Proposal Agent for Advanced AI Course in HIAS</strong>
+  <strong>Agent that make Research Proposals</strong>
 </p>
 
 # ProposalAgent
