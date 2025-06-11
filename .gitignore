@@ -73,3 +73,5 @@ cover/
 .DS_Store
 .project
 .settings
+
+frontend/node_moudles
