@@ -26,6 +26,9 @@ from .state import ProposalState
 from backend.src.utils.queue_util import QueueUtil
 from backend.src.utils.stream_mes_util import stream_mes_2_full_content
 from ..entity.stream_mes import StreamMes
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
@@ -119,19 +122,17 @@ class ProposalAgent:
         research_field = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
         existing_questions = state.get("clarification_questions", [])
-        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
-        
+        revision_guidance = state.get("revision_guidance", "")
         
         # 如果有修订指导，跳过生成澄清问题
         if revision_guidance:
             logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
-            state["clarification_questions"] = []  # 清空可能存在的问题
+            state["clarification_questions"] = []
             return state
         
         # 原有逻辑保持不变
         if user_clarifications:
-            # 用户已提供澄清，无需再生成问题
-            state["clarification_questions"] = [] # 清空旧问题（如果有）
+            state["clarification_questions"] = []
             return state
         
         if existing_questions:
@@ -282,7 +283,7 @@ class ProposalAgent:
         state["research_plan"] = full_content
         # response = self.llm.invoke([HumanMessage(content=final_prompt)])
         
-        state["research_plan"] = response.content
+        # state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
         state["execution_memory"] = []
         state["history_summary"] = "" # 重置历史摘要
