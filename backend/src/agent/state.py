@@ -8,7 +8,7 @@ class ProposalState(TypedDict):
     状态字典，用于在LangGraph中传递信息。
     """
     proposal_id: str # 新增：用于唯一标识一次完整的任务流程，对长期记忆和线程管理至关重要
-    research_field: str # 用户输入的研究领域
+    research_field: str # 用户输入的研究领域                  # 研究领域
     query: str
     arxiv_papers: List[Dict]
     web_search_results: List[Dict]
@@ -55,4 +55,5 @@ class ProposalState(TypedDict):
     final_report_markdown: str # 新增最终报告Markdown内容字段
     proposal_id: str #唯一标识生成的md
     clarification_questions: List[str] # 新增：代理生成的澄清问题
-    user_clarifications: str # 新增：用户对澄清问题的回答
+    user_clarifications: str             # 用户提供的澄清信息
+    revision_guidance: str               # 新增：评审后的修订指导

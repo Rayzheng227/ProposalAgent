@@ -109,9 +109,16 @@ class ProposalAgent:
         research_field = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
         existing_questions = state.get("clarification_questions", [])
-
+        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
+        
+        # 如果有修订指导，跳过生成澄清问题
+        if revision_guidance:
+            logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
+            state["clarification_questions"] = []  # 清空可能存在的问题
+            return state
+        
+        # 原有逻辑保持不变
         if user_clarifications:
-            logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
             # 用户已提供澄清，无需再生成问题
             state["clarification_questions"] = [] # 清空旧问题（如果有）
             return state
@@ -145,6 +152,7 @@ class ProposalAgent:
         """首先基于问题去创建一个总体的规划"""
         research_field_original = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
+        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
         tools_info = self.get_tools_info_text()
 
         # --- 从长期记忆中检索相关信息 ---
@@ -166,24 +174,94 @@ class ProposalAgent:
                 retrieved_knowledge_text += "\n--------------------------\n"
         # ------------------------------------
 
-        clarification_text_for_prompt = ""
+        # --- 从长期记忆中检索相关信息 ---
+        logging.info(f"🔍 正在从长期记忆中检索与 '{research_field_original}' 相关的信息...")
+        try:
+            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2) # 检索最相关的2个
+        except Exception as e:
+            logging.warning(f"⚠️ 从长期记忆中检索信息失败: {e}")
+            retrieved_docs = []
+        
+        retrieved_knowledge_text = ""
+        if retrieved_docs:
+            logging.info(f"✅ 从长期记忆中检索到 {len(retrieved_docs)} 条相关记录。")
+            retrieved_knowledge_text += "\n\n### 供参考的历史研究项目摘要\n"
+            retrieved_knowledge_text += "这是过去完成的类似研究项目，你可以借鉴它们的思路和结论，但不要照搬。\n"
+            for i, doc in enumerate(retrieved_docs):
+                retrieved_knowledge_text += f"\n--- 相关历史项目 {i+1} ---\n"
+                retrieved_knowledge_text += doc.page_content
+                retrieved_knowledge_text += "\n--------------------------\n"
+        # ------------------------------------
+
+        # 构建提示文本
+        prompt_additions = []
+        
         if user_clarifications:
-            clarification_text_for_prompt = (
-                f"\n\n### 用户提供的额外信息\n"
-                f"为进一步聚焦研究方向，用户提供了以下澄清，请务必仔细考虑：\n"
+            clarification_text= (
+                f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
                 f"{user_clarifications}\n"
             )
-            logging.info("📝 正在使用用户提供的澄清信息来指导总体规划。")
+            prompt_additions.append(clarification_text)
+            logging.info("📝 使用用户提供的澄清信息来指导总体规划。")
 
-        prompt_template = master_plan_instruction.format(
-            research_field=research_field_original,
+        if revision_guidance:
+            # 提取修订指南的摘要部分
+            revision_summary = ""
+            lines = revision_guidance.split("\n")
+            in_key_issues = False
+            count = 0
+            
+            for line in lines:
+                if "需要改进的关键问题" in line:
+                    in_key_issues = True
+                    revision_summary += line + "\n"
+                    continue
+                
+                if in_key_issues and line.strip() and not line.startswith("##"):
+                    revision_summary += line + "\n"
+                    count += 1
+                    
+                if count > 5 or (in_key_issues and line.startswith("##")):
+                    in_key_issues = False
+                    
+            if not revision_summary:
+                # 如果没有提取到关键问题，使用前500个字符作为摘要
+                revision_summary = revision_guidance[:500] + "...(更多详细修订建议)"
+                
+            revision_text = (
+                f"\n\n修订指导：请根据以下修订建议调整研究计划，保留原计划的优势并改进不足：\n"
+                f"{revision_summary}\n"
+            )
+            prompt_additions.append(revision_text)
+            logging.info("📝 使用评审反馈的修订指导来改进计划。")
+
+        # 构建完整提示
+        base_prompt_template = master_plan_instruction # 从 prompts.py 导入
+
+        lines = base_prompt_template.splitlines()
+        new_lines = []
+        inserted = False
+        for line in lines:
+            new_lines.append(line)
+            if "{research_field}" in line and prompt_additions:
+                # 在包含 {research_field} 的行之后插入提示信息
+                new_lines.extend(prompt_additions)
+                inserted = True
+        
+        if not inserted and prompt_additions: # 后备：如果占位符未找到，则追加
+            new_lines.extend(prompt_additions)
+            
+        modified_master_plan_prompt_template = "\n".join(new_lines)
+        
+        master_planning_prompt = modified_master_plan_prompt_template.format(
+            research_field=research_field_original, # 此处使用原始研究领域
             tools_info=tools_info
         )
         
         # 将所有上下文信息整合到最终的提示中
         final_prompt = (
-            f"{prompt_template}\n"
-            f"{clarification_text_for_prompt}\n"
+            f"{master_planning_prompt}\n"
+            # f"{clarification_text}\n"
             f"{retrieved_knowledge_text}"
         )
         
@@ -204,7 +282,15 @@ class ProposalAgent:
     
     # Ensure this method is correctly indented as part of the ProposalAgent class
     def _decide_after_clarification(self, state: ProposalState) -> str:
-        """Determines the next step after the clarification node."""
+        """确定澄清节点后的下一步。"""
+        revision_guidance = state.get("revision_guidance", "")
+        
+        # 如果有修订指导，直接进入下一步
+        if revision_guidance:
+            logging.info("✅ 检测到修订指导，直接进入计划生成阶段。")
+            return "proceed_to_master_plan"
+            
+        # 原有逻辑
         if state.get("clarification_questions") and not state.get("user_clarifications"):
             logging.info("❓ Clarification questions generated. Waiting for user input.")
             return "end_for_user_input" 
@@ -426,7 +512,7 @@ class ProposalAgent:
         web_refs = [ref for ref in reference_list if ref.get("type") == "Web"]
         
         if arxiv_refs:
-            literature_summary += "\n\n**相关ArXiv论文：**\n"
+            literature_summary += "\n\n**相关Arxiv论文：**\n"
             for ref in arxiv_refs:
                 literature_summary += f"[{ref['id']}] {ref['title']}\n"
                 literature_summary += f"   作者: {', '.join(ref['authors'])}\n"
@@ -918,19 +1004,19 @@ class ProposalAgent:
         return workflow.compile(checkpointer=MemorySaver())
 
 
-    def generate_proposal(self, research_field: str, proposal_id: str, user_clarifications: str = "") -> Dict[str, Any]:
-        """生成一个完整的研究计划书"""
+    def generate_proposal(self, research_field: str, proposal_id: str,user_clarifications: str = "", revision_guidance: str = "") -> Dict[str, Any]:
+        """生成研究计划书"""
         if not proposal_id:
             proposal_id = f"proposal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # 配置线程（任务），这是使用Checkpointer所必需的
         config = {"configurable": {"thread_id": proposal_id}}
 
         initial_state = {
             "research_field": research_field,
-            "user_clarifications": user_clarifications,
-            "proposal_id": proposal_id,
-            # 初始化其他状态字段，以避免KeyError
+            "user_clarifications": user_clarifications, # 新增：接收用户澄清
+            "revision_guidance": revision_guidance,
+            "proposal_id": proposal_id,  # 新增：唯一标识符
+            "clarification_questions": [], # 新增：初始化澄清问题列表
             "query": "",
             "arxiv_papers": [],
             "web_search_results": [],
@@ -945,7 +1031,6 @@ class ProposalAgent:
             "available_tools": [],
             "execution_plan": [],
             "execution_memory": [],
-            "history_summary": "",
             "current_step": 0,
             "max_iterations": 10,
             "introduction": "",
@@ -953,25 +1038,20 @@ class ProposalAgent:
             "research_design": "",
             "timeline_plan": "",
             "expected_results": "",
-            "reference_list": [],
-            "ref_counter": 0,
+            "reference_list": [],  # 初始化统一参考文献列表
+            "ref_counter": 1,      # 初始化参考文献计数器
             "final_references": "",
             "conclusion": "",
-            "final_report_markdown": "",
-            "clarification_questions": [],
+            "final_report_markdown": "" # 初始化最终报告字段
         }
-
-        logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
-        # 调用invoke时传入config
-        result = self.workflow.invoke(initial_state, config=config)
         
-        # 提取澄清问题，如果它们是调用的直接结果
+        logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
+        result = self.workflow.invoke(initial_state,config=config)
         clarification_questions = result.get("clarification_questions", [])
         if clarification_questions:
             logging.info(" agent生成澄清问题，等待用户输入")
             return {"clarification_questions": clarification_questions}
-
-        # 如果没有澄清问题，或者流程已经完成，则返回最终结果
+        
         return result
 
     def summarize_history_node(self, state: ProposalState) -> ProposalState:
