@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from config import GCF, load_config
-from threadPool import get_executor
+from .config import GCF, load_config
+from .threadPool import get_executor
 from backend.src.services.agent_service import agent_service
 from backend.src.entity.r import R
 from backend.src.utils.queue_util import QueueUtil

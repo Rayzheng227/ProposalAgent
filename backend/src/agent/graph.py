@@ -121,6 +121,7 @@ class ProposalAgent:
         existing_questions = state.get("clarification_questions", [])
         revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
         
+        
         # 如果有修订指导，跳过生成澄清问题
         if revision_guidance:
             logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
@@ -276,7 +277,7 @@ class ProposalAgent:
         )
         
         logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清和历史知识) 制定总体研究计划...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 1,
+        full_content = stream_mes_2_full_content(state["proposal_id"], 2,
                                                  self.llm.stream([HumanMessage(content=master_planning_prompt)]))
         state["research_plan"] = full_content
         # response = self.llm.invoke([HumanMessage(content=final_prompt)])
@@ -343,7 +344,7 @@ class ProposalAgent:
             memory_text=memory_text
         )
         logging.info("🔍 Agent正在分析计划并生成执行步骤...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 2,
+        full_content = stream_mes_2_full_content(state["proposal_id"], 1,
                                                  self.llm.stream([HumanMessage(content=plan_analysis_prompt)]))
         # logging.info("生成计划", response.content)
         try:
@@ -1070,6 +1071,9 @@ class ProposalAgent:
         }
         
         logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
+        
+        
+        QueueUtil.new_queue(proposal_id)  # 创建消息队列
         result = self.workflow.invoke(initial_state,config=config)
         clarification_questions = result.get("clarification_questions", [])
         if clarification_questions:
