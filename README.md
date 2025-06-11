@@ -28,6 +28,9 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 - 🤖 已实现Reviewer-Agent评审系统，支持多维度评分与修订建议
 - 🌐 支持多语言 Proposal 输出
 
+<p align="center">
+  <img src="media/Workflow.jpg" alt="ProposalAgent Workflow" style="max-width: 90%; height: auto;" />
+</p>
 
 # Requirements
 - `python>=3.10`
