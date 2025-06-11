@@ -1,0 +1,103 @@
+body,
+html p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+ul,
+ol,
+dl,
+li,
+dt,
+dd {
+  /* 默认有边距，都要清除 */
+  margin: 0;
+  padding: 0;
+  /*字体设置*/
+  font-size: 14px;
+  font-family: "Microsoft Yahei", sans-serif;
+  /* 去掉列表的原点 */
+  list-style: none;
+}
+
+/* 使用伪元素清除浮动 */
+.clearfix::before,
+.clearfix::after {
+  content: "";
+  height: 0;
+  line-height: 0;
+  display: block;
+  visibility: none;
+  clear: both;
+}
+
+.clearfix {
+  *zoom: 1;
+}
+
+/* 版心*/
+.w {
+  width: 1883px;
+  margin: 0 auto;
+}
+
+/* 针对 WebKit 内核的浏览器（如 Chrome 和 Safari） */
+::-webkit-scrollbar {
+  width: 8px;
+  /* 纵向滚动条的宽度 */
+  height: 8px;
+  /* 横向滚动条的高度 */
+}
+
+::-webkit-scrollbar-thumb {
+  /* 滚动条滑块的颜色 */
+  background-color: #676767;
+  /* 滚动条滑块的圆角 */
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  /* 滚动条滑块悬停时的颜色 */
+  background-color: #c6c6c6;
+}
+
+::-webkit-scrollbar-track {
+  /* 滚动条轨道的颜色 */
+  background: #0e0e0e;
+  /* 滚动条轨道的圆角 */
+  border-radius: 3px;
+}
+
+html.dark {
+  ::-webkit-scrollbar {
+    width: 0px;
+    height: 0px;
+  }
+}
+
+.el-loading-spinner {
+  /*这个是自己想设置的 gif 加载动图*/
+  background-image: url("/src/assets/imgs/loading.gif");
+  background-repeat: no-repeat;
+  background-size: cover;
+  height: 120px;
+  width: 120px;
+  border-radius: 50%;
+  background-position: center;
+  top: 40%;
+  position: relative;
+  margin: 0 auto;
+}
+
+.el-loading-spinner .circular {
+  display: none;
+}
+
+.el-loading-spinner .el-loading-text {
+  width: 120px;
+  padding-top: 130px;
+  font-size: 16px;
+  color: #fff;
+}
