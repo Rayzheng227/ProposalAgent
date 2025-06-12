@@ -7,6 +7,11 @@ __pycache__
 .venv
 # lock文件也ignore掉
 uv.lock
+# 忽略 pdf_output 文件夹中的所有内容
+exporter/pdf_output/*
+# 但保留 figures 文件夹及其内容
+!exporter/pdf_output/figures/
+!exporter/pdf_output/figures/**
 
 # 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep

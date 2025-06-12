@@ -38,19 +38,19 @@ class PDFExporter:
         """创建YAML元数据头"""
         yaml_header = f"""---
 title: "研究计划书：{research_field}"
-author: "研究者"
+author: "ProposalAgent"
 date: "{datetime.now().strftime('%Y年%m月%d日')}"
 documentclass: article
 geometry:
-  - margin=2.5cm
-  - a4paper
+- margin=2.5cm
+- a4paper
 fontsize: 12pt
-CJKmainfont: "SimSun"
-CJKsansfont: "SimHei"
-CJKmonofont: "SimKai"
-mainfont: "Times New Roman"
-sansfont: "Arial"
-monofont: "Courier New"
+CJKmainfont: "Noto Sans CJK SC"
+CJKsansfont: "Noto Sans CJK SC"
+CJKmonofont: "Noto Sans Mono CJK SC"
+mainfont: "Liberation Serif"
+sansfont: "Liberation Sans"
+monofont: "Liberation Mono"
 linestretch: 1.5
 indent: true
 toc: true
@@ -61,33 +61,33 @@ linkcolor: blue
 urlcolor: blue
 citecolor: blue
 header-includes:
-  - \\usepackage{{xeCJK}}
-  - \\usepackage{{setspace}}
-  - \\usepackage{{indentfirst}}
-  - \\usepackage{{titlesec}}
-  - \\usepackage{{fancyhdr}}
-  - \\usepackage{{lastpage}}
-  - \\usepackage{{booktabs}}
-  - \\usepackage{{longtable}}
-  - \\usepackage{{array}}
-  - \\usepackage{{multirow}}
-  - \\usepackage{{wrapfig}}
-  - \\usepackage{{float}}
-  - \\usepackage{{colortbl}}
-  - \\usepackage{{pdflscape}}
-  - \\usepackage{{tabu}}
-  - \\usepackage{{threeparttable}}
-  - \\usepackage{{threeparttablex}}
-  - \\usepackage{{ulem}}
-  - \\usepackage{{makecell}}
-  - \\pagestyle{{fancy}}
-  - \\fancyhf{{}}
-  - \\fancyhead[L]{{研究计划书：{research_field}}}
-  - \\fancyhead[R]{{\\thepage/\\pageref{{LastPage}}}}
-  - \\fancyfoot[C]{{\\thepage}}
-  - \\renewcommand{{\\headrulewidth}}{{0.4pt}}
-  - \\renewcommand{{\\footrulewidth}}{{0.4pt}}
-  - \\setlength{{\\parindent}}{{2em}}
+- \\usepackage{{xeCJK}}
+- \\usepackage{{setspace}}
+- \\usepackage{{indentfirst}}
+- \\usepackage{{titlesec}}
+- \\usepackage{{fancyhdr}}
+- \\usepackage{{lastpage}}
+- \\usepackage{{booktabs}}
+- \\usepackage{{longtable}}
+- \\usepackage{{array}}
+- \\usepackage{{multirow}}
+- \\usepackage{{wrapfig}}
+- \\usepackage{{float}}
+- \\usepackage{{colortbl}}
+- \\usepackage{{pdflscape}}
+- \\usepackage{{tabu}}
+- \\usepackage{{threeparttable}}
+- \\usepackage{{threeparttablex}}
+- \\usepackage{{ulem}}
+- \\usepackage{{makecell}}
+- \\pagestyle{{fancy}}
+- \\fancyhf{{}}
+- \\fancyhead[L]{{研究计划书：{research_field}}}
+- \\fancyhead[R]{{\\thepage/\\pageref{{LastPage}}}}
+- \\fancyfoot[C]{{\\thepage}}
+- \\renewcommand{{\\headrulewidth}}{{0.4pt}}
+- \\renewcommand{{\\footrulewidth}}{{0.4pt}}
+- \\setlength{{\\parindent}}{{2em}}
 ---
 
 """
@@ -223,7 +223,7 @@ header-includes:
             '-V', 'fontsize=12pt',
             '-V', 'linestretch=1.5',
             '-V', 'indent=true',
-            '--filter=pandoc-crossref',  # 如果安装了crossref过滤器
+            # '--filter=pandoc-crossref',  # 如果安装了crossref过滤器
             '-o', str(output_pdf)
         ]
         

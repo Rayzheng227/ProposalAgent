@@ -604,7 +604,7 @@ class ProposalAgent:
         rank_reference_list = self.rerank_with_llm(state["research_field"], state["reference_list"])
         state["reference_list"] = rank_reference_list
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state)
+        literature_summary = self.get_literature_summary_with_refs(state, step=4)
 
         citation_instruction = """
         **引用要求：**
@@ -877,16 +877,16 @@ class ProposalAgent:
         # 构建Markdown内容
         report_content = f"# 研究计划书：{research_field}\n\n"
 
-        # report_content += "## 1. 引言\n\n"
+        report_content += "## 1. 引言\n\n"
         report_content += f"{introduction}\n\n"
 
-        # report_content += "## 2. 文献综述\n\n"
+        report_content += "## 2. 文献综述\n\n"
         report_content += f"{literature_review}\n\n"
 
-        # report_content += "## 3. 研究设计与方法\n\n"
+        report_content += "## 3. 研究设计与方法\n\n"
         report_content += f"{research_design}\n\n"
 
-        # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
+        report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
         report_content += f"{conclusion}\n\n"
 
         report_content += f"{final_references}\n\n"  # 参考文献部分自带 "## 参考文献" 标题

@@ -48,7 +48,7 @@ if __name__ == "__main__":
         
         print("\n请将您的回答合并成一段文字输入。")
         try:
-            with timeout_input(10):  # 10秒超时
+            with timeout_input(60):  # 10秒超时
                 user_response = input("您的澄清：") # 脚本将在这里等待输入
                 user_clarifications = user_response.strip() # 如果用户直接按回车，这里可以是空的
         except TimeoutError:

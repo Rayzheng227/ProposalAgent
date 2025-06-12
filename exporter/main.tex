@@ -1,0 +1,61 @@
+% !TEX program = xelatex
+\documentclass{phdproposal}
+
+% 进行个人信息设置
+\suptitle{研究计划书}
+\title{[title]}
+\author{Proposal Agent}
+\date{[time]}
+
+% 添加必要的宏包
+\usepackage[numbers]{natbib}
+
+\begin{document}
+
+\frontmatter
+
+% 生成标题页
+\maketitle
+
+\clearpage
+\pagenumbering{Roman}
+
+% 生成目录
+\maketoc[nopagenum]
+
+\clearpage
+\pagenumbering{arabic}
+
+\mainmatter
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 正文内容从这里开始  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\chapter{引言}
+
+[引言]
+
+\chapter{文献综述}
+
+[文献综述]
+
+\chapter{研究内容与方法}
+
+[研究内容]
+
+\chapter{总结与展望}
+
+[总结]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\backmatter
+
+%%%%%%%%%%%%%%%%%%%%%%%% 生成参考文献  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\bibliographystyle{shnuthesis-numeric}
+\bibliography{mybib}
+
+\end{document}
+
+
+
