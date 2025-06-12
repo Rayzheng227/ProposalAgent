@@ -601,7 +601,12 @@ class ProposalAgent:
         research_field = state["research_field"]
         research_plan = state["research_plan"]
 
+        # 先进行重排序，但不重新分配ID
         rank_reference_list = self.rerank_with_llm(state["research_field"], state["reference_list"])
+        # 重排序后重新分配统一的ID
+        for i, ref in enumerate(rank_reference_list, 1):
+            ref["id"] = i
+        
         state["reference_list"] = rank_reference_list
         # 使用统一的文献摘要
         literature_summary = self.get_literature_summary_with_refs(state, step=4)
@@ -860,6 +865,7 @@ class ProposalAgent:
 
         research_plan = state.get("research_plan", "无初始研究计划")
         execution_memory = state.get("execution_memory", [])
+        reference_list = state.get("reference_list", [])
 
         # 创建output文件夹
         output_dir = "./output"
@@ -872,34 +878,36 @@ class ProposalAgent:
         safe_research_field = "".join(
             c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
         report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
+        references_filename = f"References_{safe_research_field}_{uuid}.json"
         report_filepath = os.path.join(output_dir, report_filename)
+        references_filepath = os.path.join(output_dir, references_filename)
 
         # 构建Markdown内容
         report_content = f"# 研究计划书：{research_field}\n\n"
 
-        report_content += "## 1. 引言\n\n"
+        # report_content += "## 1. 引言\n\n"
         report_content += f"{introduction}\n\n"
 
-        report_content += "## 2. 文献综述\n\n"
+        # report_content += "## 2. 文献综述\n\n"
         report_content += f"{literature_review}\n\n"
 
-        report_content += "## 3. 研究设计与方法\n\n"
+        # report_content += "## 3. 研究设计与方法\n\n"
         report_content += f"{research_design}\n\n"
 
-        report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
+        # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
         report_content += f"{conclusion}\n\n"
 
         report_content += f"{final_references}\n\n"  # 参考文献部分自带 "## 参考文献" 标题
 
         report_content += "---\n"
-        report_content += "## 附录：过程资料\n\n"
+        report_content += "# 附录：过程资料\n\n"
 
-        report_content += "### A.1 初始研究计划\n\n"
+        report_content += "## A.1 初始研究计划\n\n"
         report_content += "```markdown\n"
         report_content += f"{research_plan}\n"
         report_content += "```\n\n"
 
-        report_content += "### A.2 执行步骤记录\n\n"
+        report_content += "## A.2 执行步骤记录\n\n"
         if execution_memory:
             for i, step_memory in enumerate(execution_memory):
                 action = step_memory.get("action", "未知动作")
@@ -912,13 +920,24 @@ class ProposalAgent:
         else:
             report_content += "无执行记录。\n\n"
 
-        report_content += "### A.3 收集的文献与信息摘要\n\n"
+        report_content += "## A.3 收集的文献与信息摘要\n\n"
         report_content += self.get_literature_summary_with_refs(state, 9) + "\n\n"
 
         try:
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 f.write(report_content)
             logging.info(f"✅ 最终报告已保存到: {report_filepath}")
+            
+            # 保存参考文献列表为JSON文件
+            try:
+                with open(references_filepath, 'w', encoding='utf-8') as ref_file:
+                    json.dump(reference_list, ref_file, ensure_ascii=False, indent=2)
+                logging.info(f"✅ 参考文献列表已保存到: {references_filepath}")
+                QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, f"\n✅ 参考文献列表已保存"))
+            except Exception as ref_e:
+                logging.error(f"❌ 保存参考文献列表失败: {ref_e}")
+                QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, f"\n⚠️ 参考文献列表保存失败"))
+            
             state["final_report_markdown"] = report_content
             QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "\n✅ 报告生成完毕"))
             # 结束标记
@@ -1216,23 +1235,22 @@ class ProposalAgent:
 
         return state
 
-    def rerank_with_llm(self, research_field : str, reference_list : List[Dict], top_n=10) -> List[Dict] :
+    def rerank_with_llm(self, research_field: str, reference_list: List[Dict], relevance_threshold: float = 0.6) -> List[Dict]:
         """
         使用大型语言模型（LLM）对搜索结果进行重排序。
 
         参数:
             research_field (str): 研究领域
             reference_list (List[Dict]): 初始搜索结果
-            top_n (int): 重排序后返回的结果数量
+            relevance_threshold (float): 相关性阈值比例，默认0.6（即平均分的60%）
 
         返回:
-            List[Dict]: 重排序后的结果
+            List[Dict]: 重排序后的结果（保留高于平均分60%的文献）
         """
-        if(len(reference_list) < 10):
-            logging.info(f"参考文件少于十条不进行重排序...")
+        if len(reference_list) < 3:
+            logging.info(f"参考文件少于3条不进行重排序...")
             return reference_list
 
-        global response
         logging.info(f"重排序 {len(reference_list)} 个文件...")
 
         scored_results = []  # 初始化一个空列表来存储评分后的结果
@@ -1253,25 +1271,13 @@ class ProposalAgent:
             if i % 5 == 0:
                 logging.info(f"正在排序第 {i + 1}/{len(reference_list)} 个文件...")
 
-            if (reference["type"] == "ArXiv"):
+            response = None  # 初始化 response 变量
+
+            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef":
                 # 定义用户提示给LLM
                 user_prompt = f"""Query: {research_field}
-        Document: {reference['summary']}
-        Rate this document's relevance to the query on a scale from 0 to 10:"""
-
-                # 调用LLM获取评分
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_prompt)
-                ]
-
-                response = self.llm.invoke(messages)
-
-            if(reference["type"] == "Web"):
-                # 定义用户提示给LLM
-                user_prompt = f"""Query: {research_field}
-                        Document: {reference['content_preview']}
-                        Rate this document's relevance to the query on a scale from 0 to 10:"""
+    Document: {reference.get('summary', '')}
+    Rate this document's relevance to the query on a scale from 0 to 10:"""
 
                 # 调用LLM获取评分
                 messages = [
@@ -1279,37 +1285,67 @@ class ProposalAgent:
                     HumanMessage(content=user_prompt)
                 ]
                 response = self.llm.invoke(messages)
-                # 提取评分
+
+            elif reference["type"] == "Web":
+                # 定义用户提示给LLM
+                user_prompt = f"""Query: {research_field}
+    Document: {reference.get('content_preview', '')}
+    Rate this document's relevance to the query on a scale from 0 to 10:"""
+
+                # 调用LLM获取评分
+                messages = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt)
+                ]
+                response = self.llm.invoke(messages)
+            
+            # 提取评分
             try:
-                score = int(response.content.strip())
+                if response:
+                    score = int(response.content.strip())
+                else:
+                    # 如果类型不是 ArXiv 或 Web，给默认评分
+                    logging.warning(f"未知的文献类型: {reference.get('type', 'Unknown')}")
+                    score = 0
             except Exception as e:
                 logging.error(f"文件排序错误 {i}: {e}")
                 score = 0  # 默认评分 0
 
-            # 将评分和原始结果一起存储
+            # 将评分和原始结果一起存储（保留完整的reference信息）
             scored_results.append((score, reference))
 
-        # 根据评分降序排序结果
-        scored_results.sort(reverse=True, key=lambda x: x[0])
-
-        # 取前top_n个结果
-        top_reference_list = [result for _, result in scored_results[:top_n]]
-
-        arxiv_ref_id = 1
-        web_ref_id = 1
-        arxiv_refs = [ref for ref in top_reference_list if ref.get("type") == "ArXiv"]
-        web_refs = [ref for ref in top_reference_list if ref.get("type") == "Web"]
-
-        filter_reference_list = []
-        if arxiv_refs:
-            for ref in arxiv_refs:
-                ref["id"] = arxiv_ref_id
-                filter_reference_list.append(ref)
-                arxiv_ref_id += 1
-        if web_refs:
-            for ref in web_refs:
-                ref["id"] = web_ref_id
-                filter_reference_list.append(ref)
-                web_ref_id += 1
-        logging.info(f"采用相关性最高的十个文件")
-        return filter_reference_list
+        # 计算平均分
+        if scored_results:
+            scores = [score for score, _ in scored_results]
+            average_score = sum(scores) / len(scores)
+            threshold_score = average_score * relevance_threshold
+            
+            logging.info(f"平均评分: {average_score:.2f}, 阈值: {threshold_score:.2f} (平均分的{relevance_threshold*100}%)")
+            
+            # 筛选高于阈值的文献
+            filtered_results = [(score, ref) for score, ref in scored_results if score >= threshold_score]
+            
+            if not filtered_results:
+                # 如果没有文献达到阈值，至少保留评分最高的3个
+                logging.warning("没有文献达到相关性阈值，保留评分最高的3个文献")
+                scored_results.sort(reverse=True, key=lambda x: x[0])
+                filtered_results = scored_results[:3]
+            else:
+                # 按评分降序排序
+                filtered_results.sort(reverse=True, key=lambda x: x[0])
+                
+            # 提取文献信息并重新分配ID
+            final_reference_list = []
+            for i, (score, reference) in enumerate(filtered_results, 1):
+                reference_copy = reference.copy()  # 创建副本避免修改原始数据
+                reference_copy["relevance_score"] = score  # 添加相关性评分
+                final_reference_list.append(reference_copy)
+            
+            logging.info(f"筛选后保留 {len(final_reference_list)} 个相关文献")
+            for i, ref in enumerate(final_reference_list[:5]):  # 显示前5个的评分
+                logging.info(f"  文献 {i+1}: {ref.get('title', 'Unknown')[:50]}... (评分: {ref.get('relevance_score', 0)})")
+            
+            return final_reference_list
+        else:
+            logging.warning("没有评分结果，返回原始列表")
+            return reference_list

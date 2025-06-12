@@ -316,7 +316,7 @@ Your task is to **write a well-structured conclusion section in Chinese** for th
 
 ## ✍️ What to include (All content in Chinese):
 
-### 1. 时间线 (Timeline)
+### 1. 研究时间线 (Timeline)
 - Present a realistic **timeline for completing the research project**, typically divided by months or phases (e.g., Month 1–3, 4–6…).
 - Link each time segment to corresponding activities: literature review, data collection, analysis, writing, editing, etc.
 - Reflect awareness of prior work already completed and upcoming milestones.
@@ -338,10 +338,10 @@ Your task is to **write a well-structured conclusion section in Chinese** for th
 
 ## ✅ Format & Style (All content in Chinese)
 
-- Use **Markdown format** with section headers as specified below (these headers should also be in Chinese if possible, or use the English ones if the LLM handles it better for structure, but the content must be Chinese):
-  - `### 时间线`
-  - `### 预期成果`
-  - `### 最终总结`
+- Use **Markdown format** with section headers as specified below (use Markdown level-1 headers with Chinese titles):
+  - `# 研究时间线`
+  - `# 预期成果`
+  - `# 最终总结`
 - Use **academic, clear, and concise Chinese language**.
 - The total content should be around **500–700 words (Chinese characters)**.
 - Ensure it logically follows from the previous parts and avoids introducing completely new ideas.
