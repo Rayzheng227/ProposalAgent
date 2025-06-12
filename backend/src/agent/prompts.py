@@ -310,7 +310,9 @@ The user has already written the following parts:
 - ✅ Literature Review (analyzing prior work and framing the context)
 - ✅ Project Design (explaining data sources, methods, and research workflow)
 
-Your task is to **write a well-structured conclusion section in Chinese** for the proposal that includes:
+Your task is to **write a well-structured conclusion section in Chinese** for the proposal. **The entire output you generate, comprising the sub-sections '研究时间线', '预期成果', and '最终总结', will be used as the content for the '总结与展望' chapter of the research proposal.**
+
+This section should include:
 
 ---
 
@@ -345,6 +347,7 @@ Your task is to **write a well-structured conclusion section in Chinese** for th
 - Use **academic, clear, and concise Chinese language**.
 - The total content should be around **500–700 words (Chinese characters)**.
 - Ensure it logically follows from the previous parts and avoids introducing completely new ideas.
+- **The combined output of these three sub-sections (研究时间线, 预期成果, 最终总结) should form a single, coherent text block intended for the '总结与展望' chapter.**
 
 📌 Important: The conclusion should leave the reader confident that the research plan is feasible, coherent, and valuable. **All output for this section must be in Chinese.**
 """

@@ -9,6 +9,18 @@
 
 % 添加必要的宏包
 \usepackage[numbers]{natbib}
+\usepackage{hyperref} % 建议添加此包，用于生成PDF内部链接和处理URL
+\hypersetup{ % 可选：配置hyperref，使其生成的链接更美观
+    colorlinks=true,
+    linkcolor=black, % 内部链接颜色（如目录、交叉引用）
+    citecolor=black, % 引用链接颜色
+    filecolor=black, % 文件链接颜色
+    urlcolor=blue,   % URL链接颜色
+    pdftitle={[title]},
+    pdfauthor={Proposal Agent},
+    bookmarks=true,
+    bookmarksopen=true
+}
 
 \begin{document}
 
@@ -52,8 +64,9 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%% 生成参考文献  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\bibliographystyle{shnuthesis-numeric}
-\bibliography{mybib}
+[参考文献内容]
+% \bibliographystyle{shnuthesis-numeric}
+% \bibliography{mybib}
 
 \end{document}
 

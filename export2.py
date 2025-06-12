@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, List
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
+import json # Added for JSON parsing
 
 load_dotenv()
 Api_key = os.getenv('DASHSCOPE_API_KEY')
@@ -31,6 +32,7 @@ class ProposalExporter:
         self.markdown_source_dir = "output"  # Markdown文件的源目录
         self.output_dir = "exporter/pdf_output"       # TeX/PDF的输出目录
         self.exporter_dir = "exporter"       # exporter目录路径 (包含cls, main.tex, figures)
+        self.references_data: List[Dict] = None # Added to store parsed references
         
     def read_template(self) -> str:
         """读取LaTeX模板文件"""
@@ -39,10 +41,11 @@ class ProposalExporter:
     
     def read_markdown_files(self, specific_file: str = None) -> Dict[str, str]:
         """
-        读取Markdown文件
+        读取Markdown文件并尝试加载对应的参考文献JSON文件
         :param specific_file: 指定文件名，如果为None则自动选择最新文件
         """
         md_files = {}
+        selected_md_filepath = None
         
         if specific_file:
             # 读取指定文件
@@ -52,11 +55,12 @@ class ProposalExporter:
                     content = f.read()
                     md_files[specific_file] = content
                 print(f"✓ 读取指定文件: {file_path}")
+                selected_md_filepath = file_path
             else:
                 print(f"⚠️ 指定文件不存在: {file_path}")
         else:
             # 自动选择最新文件
-            pattern = os.path.join(self.markdown_source_dir, "*.md") # 使用 markdown_source_dir
+            pattern = os.path.join(self.markdown_source_dir, "Research_Proposal_*.md") # More specific pattern
             all_md_files = glob.glob(pattern)
             
             if all_md_files:
@@ -70,10 +74,137 @@ class ProposalExporter:
                 
                 print(f"✓ 自动选择最新文件: {latest_file}")
                 print(f"  文件修改时间: {datetime.fromtimestamp(os.path.getmtime(latest_file))}")
+                selected_md_filepath = latest_file
             else:
-                print(f"⚠️ 在目录 '{self.markdown_source_dir}' 中未找到任何Markdown文件")
+                print(f"⚠️ 在目录 '{self.markdown_source_dir}' 中未找到任何符合 'Research_Proposal_*.md' 格式的Markdown文件")
+
+        if selected_md_filepath:
+            self._load_references_json(selected_md_filepath)
         
         return md_files
+
+    def _load_references_json(self, md_filepath: str):
+        """
+        根据Markdown文件路径加载对应的参考文献JSON文件。
+        """
+        md_basename = os.path.basename(md_filepath)
+        if md_basename.startswith("Research_Proposal_"):
+            # Construct reference JSON filename: References_Topic_timestamp_uuid.json
+            # Example: Research_Proposal_LLM_A_..._uuid.md -> References_LLM_A_..._uuid.json
+            ref_json_basename = md_basename.replace("Research_Proposal_", "References_", 1)
+            ref_json_basename = os.path.splitext(ref_json_basename)[0] + ".json" # Ensure .json extension
+            
+            ref_json_filepath = os.path.join(self.markdown_source_dir, ref_json_basename)
+            
+            if os.path.exists(ref_json_filepath):
+                try:
+                    with open(ref_json_filepath, 'r', encoding='utf-8') as f:
+                        self.references_data = json.load(f)
+                    print(f"✓ 成功加载参考文献文件: {ref_json_filepath}")
+                except json.JSONDecodeError:
+                    print(f"⚠️ 解析参考文献JSON文件失败: {ref_json_filepath}")
+                    self.references_data = None
+                except Exception as e:
+                    print(f"⚠️ 读取参考文献文件时出错: {ref_json_filepath}, Error: {e}")
+                    self.references_data = None
+            else:
+                print(f"ℹ️ 未找到对应的参考文献文件: {ref_json_filepath}")
+                self.references_data = None
+        else:
+            print(f"ℹ️ Markdown文件名 '{md_basename}' 不符合预期的 'Research_Proposal_' 前缀，跳过加载参考文献。")
+            self.references_data = None
+
+    def _escape_latex(self, text: str) -> str:
+        """Escapes special LaTeX characters in a string."""
+        if not isinstance(text, str):
+            return ""
+        # Order matters
+        text = text.replace('\\', r'\textbackslash{}')
+        text = text.replace('{', r'\{')
+        text = text.replace('}', r'\}')
+        text = text.replace('_', r'\_')
+        text = text.replace('^', r'\^{}')
+        text = text.replace('&', r'\&')
+        text = text.replace('%', r'\%')
+        text = text.replace('$', r'\$')
+        text = text.replace('#', r'\#')
+        text = text.replace('~', r'\textasciitilde{}')
+        return text
+
+    def _format_single_reference_to_latex(self, ref: Dict) -> str:
+        """Formats a single reference dictionary to a LaTeX \bibitem content string."""
+        item_text = ""
+        ref_type = ref.get("type", "Unknown")
+
+        title = self._escape_latex(ref.get("title", "N.T."))
+        authors_list = ref.get("authors", [])
+        authors_str = self._escape_latex(", ".join(authors_list) if authors_list else "N.A.")
+
+        if ref_type == "ArXiv":
+            arxiv_id = self._escape_latex(ref.get("arxiv_id", ""))
+            published = self._escape_latex(ref.get("published", ""))
+            # summary = self._escape_latex(ref.get("summary", "")) # Summary usually not in bib item
+            item_text = f"{authors_str}. {title}. arXiv:{arxiv_id} ({published})."
+        elif ref_type == "CrossRef":
+            journal = self._escape_latex(ref.get("journal", ""))
+            published = self._escape_latex(ref.get("published", ""))
+            doi = self._escape_latex(ref.get("doi", ""))
+            item_text = f"{authors_str}. {title}. {journal} ({published}). DOI: {doi}."
+        elif ref_type == "Web":
+            url = ref.get("url", "") # Do not escape URL, pass to \url{}
+            # Access date might be missing, graph.py generates it on the fly.
+            # For now, we'll just use the URL.
+            item_text = f"{title}. URL: \\url{{{url}}}"
+        else:
+            item_text = f"{self._escape_latex(ref.get('title', 'N.T.'))} (Unknown Type)"
+        
+        return item_text
+
+    def _generate_latex_bibliography(self) -> str:
+        """Generates the full LaTeX bibliography section."""
+        if not self.references_data:
+            return ""
+
+        latex_bib = "" 
+
+        # 使用 \chapter* 以匹配文档其他主要部分的层级
+        # latex_bib += "\\chapter*{参考文献}\n"
+        # 手动将“参考文献”添加到目录中
+        # 第一个参数 'toc' 指的是目录文件
+        # 第二个参数 'chapter' 指的是条目的层级（与\chapter一致）
+        # 第三个参数 '参考文献' 是显示在目录中的文本
+        latex_bib += "\\addcontentsline{toc}{chapter}{参考文献}\n" 
+        
+        # Determine the widest label for thebibliography environment
+        widest_label = "9"
+        if self.references_data:
+            max_id = 0
+            for ref_item in self.references_data:
+                if isinstance(ref_item.get("id"), int) and ref_item.get("id") > max_id:
+                    max_id = ref_item.get("id")
+            if max_id > 9:
+                widest_label = "99"
+            if max_id > 99:
+                widest_label = "999"
+
+        latex_bib += f"\\begin{{thebibliography}}{{{widest_label}}}\n"
+        latex_bib += "  \\setlength{\\itemsep}{0pt} % Optional: to reduce space between items\n"
+
+
+        # Sort references by ID to ensure they match the [1], [2] order
+        sorted_references = sorted(self.references_data, key=lambda x: x.get('id', float('inf')))
+
+        for ref in sorted_references:
+            # The \bibitem command will be numbered automatically by LaTeX.
+            # The key for \bibitem{key} is not strictly needed if we don't \cite{key}
+            # but it's good practice to have one. Using 'ref' + id.
+            # However, since markdown citations are [1], [2], etc., the order is key.
+            # The default numbering of thebibliography will match this if items are ordered.
+            item_content = self._format_single_reference_to_latex(ref)
+            latex_bib += f"  \\bibitem{{{ref.get('id', '')}}} {item_content}\n"
+
+        latex_bib += "\\end{thebibliography}\n"
+        return latex_bib
     
     def truncate_content(self, content: str, max_length: int = 120000) -> str:
         """
@@ -202,14 +333,14 @@ class ProposalExporter:
         lines = content.split('\n')
         for line in lines[:10]:  # 检查前10行
             if line.strip().startswith('#'):
-                title = re.sub(r'^#+\s*', '', line.strip())
+                title = re.sub(r'^[#+]\s*', '', line.strip())
                 # 清理标题，移除特殊字符和编号
                 title = re.sub(r'：.*$', '', title)  # 移除冒号后的内容
                 title = re.sub(r'研究计划书[：:]?\s*', '', title)  # 秼除"研究计划书："
                 # 如果清理后的标题太短或为空，尝试提取冒号后的内容
                 if len(title.strip()) < 3:
                     # 重新提取，这次保留冒号后的内容
-                    original_line = re.sub(r'^#+\s*', '', line.strip())
+                    original_line = re.sub(r'^[#+]\s*', '', line.strip())
                     if '：' in original_line:
                         title = original_line.split('：', 1)[1].strip()
                     elif ':' in original_line:
@@ -338,6 +469,7 @@ Markdown内容：
             prompt_text += """
 特别注意：当提取"总结"部分时，请确保内容主要对应研究的最终结论、成果总结、未来展望，或者明确标记为"第四部分"、"结论与展望"等末尾章节。
 如果"总结"内容紧跟在"研究内容"或"第三部分"之后，请准确识别"总结"部分的起始点，避免包含前面章节的详细主体内容。
+**重要：如果"总结"部分原文包含如 '# 研究时间线', '# 预期成果', '# 最终总结' 等子标题，请务必保持这些子标题及其内容的原始顺序和Markdown格式，不要修改、合并或省略它们。你需要完整地提取这些子部分作为整个"总结"章节的内容。**
 """
         elif section_name == "研究内容":
             prompt_text += """
@@ -353,6 +485,7 @@ Markdown内容：
 3. 如果有多个相关段落，都要包含
 4. 最多返回1000字的内容
 5. **避免重复的章节编号，如果原文中有数字编号，请在提取时清理**
+**6. (针对研究内容部分) 如果原文的总结部分包含 '# 研究时间线', '# 预期成果'等子标题，请确保它们及其内容被完整且按原样提取到研究内容部分，不要改变其结构或顺序。**
 
 文本内容：
 {truncated_content}
@@ -461,6 +594,7 @@ Markdown内容：
             '文献综述': '',
             '研究内容': '',
             '总结': '',
+            '参考文献内容': '', # New placeholder for bibliography
             'time': datetime.now().strftime('%Y年%m月')
         }
         
@@ -486,6 +620,15 @@ Markdown内容：
                 print(f"✓ {section} 转换完成")
             else:
                 print(f"⚠️ 未找到 {section} 相关内容")
+        
+        # Generate LaTeX bibliography
+        print("正在生成参考文献部分...")
+        bibliography_latex = self._generate_latex_bibliography()
+        if bibliography_latex:
+            content_map['参考文献内容'] = bibliography_latex
+            print(f"✓ 参考文献部分生成完成, 长度: {len(bibliography_latex)} 字符")
+        else:
+            print("ℹ️ 未生成参考文献部分 (无数据或错误)")
             
         return content_map
     
@@ -500,6 +643,7 @@ Markdown内容：
         filled_template = filled_template.replace('[文献综述]', content_map.get('文献综述', ''))
         filled_template = filled_template.replace('[研究内容]', content_map.get('研究内容', ''))
         filled_template = filled_template.replace('[总结]', content_map.get('总结', ''))
+        filled_template = filled_template.replace('[参考文献内容]', content_map.get('参考文献内容', '')) # New
         
         return filled_template
     
