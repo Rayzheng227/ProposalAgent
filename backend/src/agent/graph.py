@@ -19,14 +19,14 @@ import json
 import os
 from datetime import datetime
 import logging
-from backend.src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
+from src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool
 from .state import ProposalState
-from backend.src.utils.queue_util import QueueUtil
-from backend.src.utils.stream_mes_util import StreamUtil
-from backend.src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
+from src.utils.queue_util import QueueUtil
+from src.utils.stream_mes_util import StreamUtil
+from src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 

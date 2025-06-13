@@ -1,5 +1,5 @@
-from backend.src.entity.stream_mes import StreamAnswerMes, StreamClarifyMes
-from backend.src.utils.queue_util import QueueUtil
+from src.entity.stream_mes import StreamAnswerMes, StreamClarifyMes
+from src.utils.queue_util import QueueUtil
 from langchain_core.messages import BaseMessageChunk
 from typing import Iterator
 import time

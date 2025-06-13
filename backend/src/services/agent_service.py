@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from backend.src.agent.graph import ProposalAgent
+from src.agent.graph import ProposalAgent
 import os
 
 

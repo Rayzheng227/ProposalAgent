@@ -7,10 +7,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from backend.src.services.agent_service import agent_service
-from backend.src.entity.r import R
-from backend.src.utils.queue_util import QueueUtil
-from backend.src.entity.stream_mes import StreamMes
+from src.services.agent_service import agent_service
+from src.entity.r import R
+from src.utils.queue_util import QueueUtil
+from src.entity.stream_mes import StreamMes
 import asyncio
 
 # 创建 FastAPI 实例
