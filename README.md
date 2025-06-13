@@ -34,7 +34,8 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 
 # Requirements
 - `python>=3.10`
-- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)、
+- `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)
+- `xelatex`
 
 # Installation
 1. Clone the repository
@@ -74,6 +75,9 @@ uv run agent.py
 
 
 - 2025.6.9 : 增加了检索后优化，重排序技术(RAG)
+
+- 2025.6.12: 加入了导出pdf的实现，通过转换成latex再编译实现；Latex的模板位于exporter/文件夹下；
+运行`uv run export2.py`能够导出最近的一篇文件（存在output文件夹下的）
 
 ----
 

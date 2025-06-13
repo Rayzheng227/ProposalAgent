@@ -4,28 +4,28 @@ Agent生成过程中的图相关：节点
 import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
-# from langchain_core.tools import tool
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-# from langgraph.graph.state import CompiledStateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict, List, Dict, Any
-# from reportlab.lib.pagesizes import letter
-# from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-# from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 import json
 import os
-# from datetime import datetime
+from datetime import datetime
 import logging
 from backend.src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
-# import fitz
+import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf
 from .state import ProposalState
 from backend.src.utils.queue_util import QueueUtil
 from backend.src.utils.stream_mes_util import StreamUtil
-from ..entity.stream_mes import StreamAnswerMes, StreamClarifyMes
+from backend.src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -116,50 +116,29 @@ class ProposalAgent:
         return tools_text
 
     def clarify_research_focus_node(self, state: ProposalState) -> ProposalState:
-        """根据研究领域生成澄清问题，并等待用户输入最多60秒"""
+        """根据研究领域生成澄清问题，或处理用户提供的澄清信息"""
         research_field = state["research_field"]
+        user_clarifications = state.get("user_clarifications", "")
+        existing_questions = state.get("clarification_questions", [])
+        revision_guidance = state.get("revision_guidance", "")
 
-        # user_clarifications = state.get("user_clarifications", "")
-        # existing_questions = state.get("clarification_questions", [])
-        # revision_guidance = state.get("revision_guidance", "")
+        # 如果有修订指导，跳过生成澄清问题
+        if revision_guidance:
+            logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
+            state["clarification_questions"] = []
+            return state
 
-        # # 如果有修订指导，跳过生成澄清问题
-        # if revision_guidance:
-        #     logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
-        #     state["clarification_questions"] = []
-        #     return state
-        #
-        # # 原有逻辑保持不变
-        # if user_clarifications:
-        #     logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
-        #     # 用户已提供澄清，无需再生成问题
-        #     state["clarification_questions"] = []  # 清空旧问题（如果有）
-        #     return state
-        #
-        # if existing_questions:
-        #     logging.info("📝 已存在澄清问题，等待用户回应。")
-        #     # 如果已有问题但无用户回应，则不重复生成
-        #     return state
-        #
-        # logging.info(f"🤔 正在为研究领域 '{research_field}' 生成澄清性问题...")
-        #
-        # prompt = CLARIFICATION_QUESTION_PROMPT.format(research_field=research_field)
-        # response = self.llm.invoke([HumanMessage(content=prompt)])
-        #
-        # generated_questions_text = response.content.strip()
-        # questions = [q.strip() for q in generated_questions_text.split('\n') if q.strip()]
-        #
-        # if questions:
-        #     state["clarification_questions"] = questions
-        #     logging.info("✅ 成功生成澄清性问题：")
-        #     for i, q in enumerate(questions):
-        #         logging.info(f"  {i + 1}. {q}")
-        #     logging.info("📢 请用户针对以上问题提供回应，并在下次请求时通过 'user_clarifications' 字段传入。")
-        # else:
-        #     logging.warning("⚠️ 未能从LLM响应中解析出澄清性问题。")
-        #     state["clarification_questions"] = []
-        #
-        # return state
+        # 原有逻辑保持不变
+        if user_clarifications:
+            logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
+            # 用户已提供澄清，无需再生成问题
+            state["clarification_questions"] = []  # 清空旧问题（如果有）
+            return state
+
+        if existing_questions:
+            logging.info("📝 已存在澄清问题，等待用户回应。")
+            # 如果已有问题但无用户回应，则不重复生成
+            return state
 
         # 生成新的澄清问题
         logging.info(f"🤔 正在为研究领域 '{research_field}' 生成澄清性问题...")
@@ -347,6 +326,7 @@ class ProposalAgent:
         )
 
         state["research_plan"] = full_content
+        # response = self.llm.invoke([HumanMessage(content=final_prompt)])
 
         # state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
@@ -358,8 +338,12 @@ class ProposalAgent:
         logging.info("✅ 总体研究计划制定完成")
         logging.info(f"研究计划内容 (部分): {state['research_plan'][:300]}...")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
 
         return state
 
@@ -454,8 +438,12 @@ class ProposalAgent:
 
         logging.info(f"✅ 生成了 {len(state['execution_plan'])} 个执行步骤")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def execute_step_node(self, state: ProposalState) -> ProposalState:
@@ -545,7 +533,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="参考文献处理",
-            content=f"\n开始处理~"
+            content=f"\n开始处理~~"
         ))
 
         # 处理ArXiv论文
@@ -571,7 +559,7 @@ class ProposalAgent:
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
-            title="参考文献处理",
+            title="",
             content=f"\n✅ 成功处理Arxiv论文，共 {len(arxiv_papers)} 篇",
         ))
 
@@ -607,7 +595,7 @@ class ProposalAgent:
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
-            title="参考文献处理",
+            title="",
             content=f"\n✅ 成功处理网络结果和CrossRef论文，共 {len(web_results)} 篇",
         ))
 
@@ -617,9 +605,9 @@ class ProposalAgent:
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
-            title="参考文献处理",
-            content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
-        ))
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def get_literature_summary_with_refs(self, state: ProposalState) -> str:
@@ -659,16 +647,16 @@ class ProposalAgent:
             QueueUtil.push_mes(StreamAnswerMes(
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
-                title="引用编号处理",
+                title="",
                 content=f"\n✅ 成功生成网络资源和CrossRef论文引用编号，共 {len(web_refs)} 篇",
             ))
 
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
-            title="引用编号处理",
-            content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
-        ))
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return literature_summary
 
     def generate_reference_section(self, state: ProposalState) -> str:
@@ -704,8 +692,14 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="格式化文献",
-            content=f"\n✅ 成功生成格式化格式化后的参考文献，共 {len(reference_list)} 篇，共耗时 {time.time() - start_time:.2f}s",
+            content=f"\n✅ 成功生成格式化格式化后的参考文献，共 {len(reference_list)} 篇",
         ))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return ref_text
 
     def write_introduction_node(self, state: ProposalState) -> ProposalState:
@@ -715,6 +709,12 @@ class ProposalAgent:
         research_plan = state["research_plan"]
 
         rank_reference_list = self.rerank_with_llm(state)
+        # 先进行重排序，但不重新分配ID
+        # rank_reference_list = self.rerank_with_llm(state["research_field"], state["refe)
+        # 重排序后重新分配统一的ID
+        for i, ref in enumerate(rank_reference_list, 1):
+            ref["id"] = i
+
         state["reference_list"] = rank_reference_list
         # 使用统一的文献摘要
         literature_summary = self.get_literature_summary_with_refs(state)
@@ -767,8 +767,12 @@ class ProposalAgent:
         state["introduction"] = full_content
         logging.info("✅ 引言部分生成完成")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def write_literature_review_node(self, state: ProposalState) -> ProposalState:
@@ -850,8 +854,12 @@ class ProposalAgent:
         state["literature_review"] = full_content
         logging.info("✅ 文献综述部分生成完成")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def write_research_design_node(self, state: ProposalState) -> ProposalState:
@@ -926,8 +934,12 @@ class ProposalAgent:
         state["research_design"] = full_content
         logging.info("✅ 研究设计部分生成完成")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def write_conclusion_node(self, state: ProposalState) -> ProposalState:
@@ -970,8 +982,12 @@ class ProposalAgent:
         state["conclusion"] = full_content
         logging.info("✅ 结论部分生成完成")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def generate_final_references_node(self, state: ProposalState) -> ProposalState:
@@ -998,6 +1014,7 @@ class ProposalAgent:
 
         research_plan = state.get("research_plan", "无初始研究计划")
         execution_memory = state.get("execution_memory", [])
+        reference_list = state.get("reference_list", [])
 
         # 创建output文件夹
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1011,7 +1028,9 @@ class ProposalAgent:
         safe_research_field = "".join(
             c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
         report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
+        references_filename = f"References_{safe_research_field}_{uuid}.json"
         report_filepath = os.path.join(output_dir, report_filename)
+        references_filepath = os.path.join(output_dir, references_filename)
 
         # 构建Markdown内容
         report_content = f"# 研究计划书：{research_field}\n\n"
@@ -1061,25 +1080,27 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="生成最终报告",
-            content="\n正在生成最终研究计划报告~",
+            content="\n正在生成最终研究计划报告~~",
         ))
         try:
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 f.write(report_content)
             logging.info(f"✅ 最终报告已保存到: {report_filepath}")
+
+            # 保存参考文献列表为JSON文件
+            try:
+                with open(references_filepath, 'w', encoding='utf-8') as ref_file:
+                    json.dump(reference_list, ref_file, ensure_ascii=False, indent=2)
+                logging.info(f"✅ 参考文献列表已保存到: {references_filepath}")
+            except Exception as ref_e:
+                logging.error(f"❌ 保存参考文献列表失败: {ref_e}")
+
             state["final_report_markdown"] = report_content
             QueueUtil.push_mes(StreamAnswerMes(
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
-                title="生成结论",
-                content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
-            ))
-            # 结束标记
-            QueueUtil.push_mes(StreamAnswerMes(
-                proposal_id=state["proposal_id"],
-                step=state["global_step_num"],
-                title="生成最终报告",
-                content="",
+                title="",
+                content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time),
                 is_finish=True
             ))
         except Exception as e:
@@ -1088,14 +1109,8 @@ class ProposalAgent:
             QueueUtil.push_mes(StreamAnswerMes(
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
-                title="生成结论",
-                content=f"\n❌ 处理失败，共耗时 {time.time() - start_time:.2f}s",
-            ))
-            QueueUtil.push_mes(StreamAnswerMes(
-                proposal_id=state["proposal_id"],
-                step=state["global_step_num"],
-                title="生成最终报告",
-                content="",
+                title="",
+                content="\n\n❌ 处理失败，共耗时 %.2fs" % (time.time() - start_time),
                 is_finish=True
             ))
 
@@ -1395,28 +1410,28 @@ class ProposalAgent:
 
         return state
 
-    def rerank_with_llm(self, state: ProposalState, top_n=10) -> List[Dict]:
+    def rerank_with_llm(self, state: ProposalState, relevance_threshold: float = 0.6) -> List[Dict]:
         """
         使用大型语言模型（LLM）对搜索结果进行重排序。
 
         参数:
             research_field (str): 研究领域
             reference_list (List[Dict]): 初始搜索结果
-            top_n (int): 重排序后返回的结果数量
+            relevance_threshold (float): 相关性阈值比例，默认0.6（即平均分的60%）
 
         返回:
-            List[Dict]: 重排序后的结果
+            List[Dict]: 重排序后的结果（保留高于平均分60%的文献）
         """
         state["global_step_num"] += 1
         start_time = time.time()
 
         research_field = state.get("research_field")
         reference_list = state.get("reference_list")
-        if len(reference_list) < 10:
-            logging.info(f"参考文件少于十条不进行重排序...")
+
+        if len(reference_list) < 3:
+            logging.info(f"参考文件少于3条不进行重排序...")
             return reference_list
 
-        full_content = ""
         logging.info(f"重排序 {len(reference_list)} 个文件...")
 
         scored_results = []  # 初始化一个空列表来存储评分后的结果
@@ -1437,11 +1452,13 @@ class ProposalAgent:
             if i % 5 == 0:
                 logging.info(f"正在排序第 {i + 1}/{len(reference_list)} 个文件...")
 
-            if (reference["type"] == "ArXiv"):
+            response = None  # 初始化 response 变量
+
+            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef":
                 # 定义用户提示给LLM
                 user_prompt = f"""Query: {research_field}
-        Document: {reference['summary']}
-        Rate this document's relevance to the query on a scale from 0 to 10:"""
+    Document: {reference.get('summary', '')}
+    Rate this document's relevance to the query on a scale from 0 to 10:"""
 
                 # 调用LLM获取评分
                 messages = [
@@ -1482,30 +1499,40 @@ class ProposalAgent:
             # 将评分和原始结果一起存储
             scored_results.append((score, reference))
 
-        # 根据评分降序排序结果
-        scored_results.sort(reverse=True, key=lambda x: x[0])
+        # 计算平均分
+        if scored_results:
+            scores = [score for score, _ in scored_results]
+            average_score = sum(scores) / len(scores)
+            threshold_score = average_score * relevance_threshold
 
-        # 取前top_n个结果
-        top_reference_list = [result for _, result in scored_results[:top_n]]
+            logging.info(
+                f"平均评分: {average_score:.2f}, 阈值: {threshold_score:.2f} (平均分的{relevance_threshold * 100}%)")
 
-        arxiv_ref_id = 1
-        web_ref_id = 1
-        arxiv_refs = [ref for ref in top_reference_list if ref.get("type") == "ArXiv"]
-        web_refs = [ref for ref in top_reference_list if ref.get("type") == "Web"]
+            # 筛选高于阈值的文献
+            filtered_results = [(score, ref) for score, ref in scored_results if score >= threshold_score]
 
-        filter_reference_list = []
-        if arxiv_refs:
-            for ref in arxiv_refs:
-                ref["id"] = arxiv_ref_id
-                filter_reference_list.append(ref)
-                arxiv_ref_id += 1
-        if web_refs:
-            for ref in web_refs:
-                ref["id"] = web_ref_id
-                filter_reference_list.append(ref)
-                web_ref_id += 1
-        logging.info(f"采用相关性最高的十个文件")
+            if not filtered_results:
+                # 如果没有文献达到阈值，至少保留评分最高的3个
+                logging.warning("没有文献达到相关性阈值，保留评分最高的3个文献")
+                scored_results.sort(reverse=True, key=lambda x: x[0])
+                filtered_results = scored_results[:3]
+            else:
+                # 按评分降序排序
+                filtered_results.sort(reverse=True, key=lambda x: x[0])
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
-        return filter_reference_list
+            # 提取文献信息并重新分配ID
+            final_reference_list = []
+            for i, (score, reference) in enumerate(filtered_results, 1):
+                reference_copy = reference.copy()  # 创建副本避免修改原始数据
+                reference_copy["relevance_score"] = score  # 添加相关性评分
+                final_reference_list.append(reference_copy)
+
+            logging.info(f"筛选后保留 {len(final_reference_list)} 个相关文献")
+            for i, ref in enumerate(final_reference_list[:5]):  # 显示前5个的评分
+                logging.info(
+                    f"  文献 {i + 1}: {ref.get('title', 'Unknown')[:50]}... (评分: {ref.get('relevance_score', 0)})")
+
+            return final_reference_list
+        else:
+            logging.warning("没有评分结果，返回原始列表")
+            return reference_list

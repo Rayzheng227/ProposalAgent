@@ -42,90 +42,129 @@ def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool =
         logging.info(f"在arxiv上搜索关键词为:{queries}")
         papers = []
         seen_ids = set()
+        
+        # 添加SSL和连接配置
+        import ssl
+        import urllib3
+        
+        # 禁用SSL警告
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
         for q in queries:
-            client = arxiv.Client()
-            search = arxiv.Search(
-                query=q,
-                max_results=max(2, max_results // len(queries)),
-                sort_by=arxiv.SortCriterion.SubmittedDate
-            )
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries:
+                try:
+                    # 创建客户端时添加延迟和重试机制
+                    client = arxiv.Client(
+                        page_size=min(10, max(2, max_results // len(queries))),
+                        delay_seconds=3,  # 增加延迟
+                        num_retries=2
+                    )
+                    
+                    search = arxiv.Search(
+                        query=q,
+                        max_results=max(2, max_results // len(queries)),
+                        sort_by=arxiv.SortCriterion.SubmittedDate
+                    )
 
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            papers_dir = os.path.join(current_dir, '..', '..', 'papers')
-            if not os.path.exists(papers_dir):
-                os.makedirs(papers_dir)
+                    papers_dir = "./Papers"
+                    if not os.path.exists(papers_dir):
+                        os.makedirs(papers_dir)
 
+                    # 添加超时控制
+                    import time
+                    search_start_time = time.time()
+                    timeout_seconds = 30  # 30秒超时
+                    
+                    for paper in client.results(search):
+                        # 检查超时
+                        if time.time() - search_start_time > timeout_seconds:
+                            logging.warning(f"ArXiv搜索超时，停止当前查询: {q}")
+                            break
+                            
+                        if paper.entry_id in seen_ids:
+                            continue
+                            
+                        paper_info = {
+                            "title": paper.title,
+                            "authors": [author.name for author in paper.authors],
+                            "summary": paper.summary[:300] + "...",  # 截断摘要
+                            "published": paper.published.strftime("%Y-%m-%d"),
+                            "pdf_url": paper.pdf_url,
+                            "categories": paper.categories,
+                            "arxiv_id": paper.entry_id.split('/')[-1]
+                        }
 
-            for paper in client.results(search):
-                if paper.entry_id in seen_ids:
-                    continue
-                paper_info = {
-                    "title": paper.title,
-                    "authors": [author.name for author in paper.authors],
-                    "summary": paper.summary[:300] + "...",  # 截断摘要
-                    "published": paper.published.strftime("%Y-%m-%d"),
-                    "pdf_url": paper.pdf_url,
-                    "categories": paper.categories,
-                    "arxiv_id": paper.entry_id.split('/')[-1]
-                }
+                        if Download:
+                            try:
+                                # 下载PDF - 改进文件名处理和错误处理
+                                logging.info(f"正在下载论文：{paper.title[:50]}...")
 
-                if Download:
-                    try:
-                        # 下载PDF - 改进文件名处理和错误处理
-                        logging.info(f"正在下载论文：{paper.title[:50]}...")
+                                # 更安全的文件名处理
+                                import re
+                                safe_title = re.sub(r'[^\w\s-]', '', paper.title)  # 移除特殊字符
+                                safe_title = re.sub(r'[-\s]+', '-', safe_title)    # 替换空格和多个连字符
+                                safe_title = safe_title.strip('-')[:40]             # 限制长度并移除首尾连字符
 
-                        # 更安全的文件名处理
-                        import re
-                        safe_title = re.sub(r'[^\w\s-]', '', paper.title)  # 移除特殊字符
-                        safe_title = re.sub(r'[-\s]+', '-', safe_title)    # 替换空格和多个连字符
-                        safe_title = safe_title.strip('-')[:40]             # 限制长度并移除首尾连字符
+                                if not safe_title:  # 如果标题处理后为空，使用默认名称
+                                    safe_title = "paper"
 
-                        if not safe_title:  # 如果标题处理后为空，使用默认名称
-                            safe_title = "paper"
+                                filename = f"{paper_info['arxiv_id']}_{safe_title}.pdf"
+                                full_path = os.path.join(papers_dir, filename)
 
-                        filename = f"{paper_info['arxiv_id']}_{safe_title}.pdf"
-                        full_path = os.path.join(papers_dir, filename)
+                                # 检查文件是否已存在
+                                if os.path.exists(full_path):
+                                    logging.info(f"论文已存在，跳过下载: {filename}")
+                                    paper_info["local_pdf_path"] = full_path
+                                else:
+                                    # 使用更稳定的下载方法
+                                    time.sleep(5)  # 增加下载间隔时间，例如5秒，以减少服务器压力
 
-                        # 检查文件是否已存在
-                        if os.path.exists(full_path):
-                            logging.info(f"论文已存在，跳过下载: {filename}")
-                            paper_info["local_pdf_path"] = full_path
-                        else:
-                            # 使用更稳定的下载方法
-                            import time
-                            time.sleep(5)  # 增加下载间隔时间，例如5秒，以减少服务器压力
+                                    paper.download_pdf(dirpath=papers_dir, filename=filename)
 
-                            paper.download_pdf(dirpath=papers_dir, filename=filename)
+                                    # 验证下载是否成功
+                                    if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+                                        paper_info["local_pdf_path"] = full_path
+                                        logging.info(f"✅ 成功下载: {filename}")
+                                    else:
+                                        paper_info["local_pdf_path"] = None
+                                        logging.warning(f"❌ 下载失败或文件为空: {filename}")
 
-                            # 验证下载是否成功
-                            if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
-                                paper_info["local_pdf_path"] = full_path
-                                logging.info(f"✅ 成功下载: {filename}")
-                            else:
+                            except Exception as e:
                                 paper_info["local_pdf_path"] = None
-                                logging.warning(f"❌ 下载失败或文件为空: {filename}")
+                                logging.warning(f"❌ 下载论文失败: {paper.title[:50]}... - 错误: {str(e)}")
 
-                    except Exception as e:
-                        paper_info["local_pdf_path"] = None
-                        logging.warning(f"❌ 下载论文失败: {paper.title[:50]}... - 错误: {str(e)}")
+                        seen_ids.add(paper.entry_id)
+                        papers.append(paper_info)
 
-                        # 如果下载失败，尝试记录更详细的错误信息
-                        error_str = str(e).lower()
-                        if "timeout" in error_str:
-                            logging.warning("可能的网络超时问题。")
-                        elif "permission" in error_str or "403" in error_str or "forbidden" in error_str:
-                            logging.warning("可能的权限问题或请求被禁止 (403 Forbidden)。这可能是由于请求频率过高。")
-                        elif "not found" in error_str or "404" in error_str:
-                            logging.warning("PDF文件可能不存在 (404 Not Found)。")
-                        elif "bad gateway" in error_str or "502" in error_str:
-                            logging.warning("服务器端错误 (502 Bad Gateway)。这可能是ArXiv服务器的临时问题。")
-
-                seen_ids.add(paper.entry_id)
-                papers.append(paper_info)
-
-                # 限制处理数量，避免过多请求
-                if len(papers) >= max_results:
+                        # 限制处理数量，避免过多请求
+                        if len(papers) >= max_results:
+                            break
+                    
+                    # 如果成功，跳出重试循环
                     break
+                    
+                except Exception as search_error:
+                    retry_count += 1
+                    error_str = str(search_error).lower()
+                    
+                    if retry_count < max_retries:
+                        wait_time = retry_count * 5  # 递增等待时间
+                        logging.warning(f"ArXiv搜索失败 (尝试 {retry_count}/{max_retries}): {str(search_error)}")
+                        logging.info(f"等待 {wait_time} 秒后重试...")
+                        time.sleep(wait_time)
+                    else:
+                        logging.error(f"ArXiv搜索最终失败: {str(search_error)}")
+                        
+                        # 提供详细的错误诊断
+                        if "ssl" in error_str or "eof" in error_str:
+                            logging.error("SSL连接错误，可能是网络问题或ArXiv服务器问题")
+                        elif "timeout" in error_str:
+                            logging.error("连接超时，请检查网络连接")
+                        elif "max retries" in error_str:
+                            logging.error("达到最大重试次数，ArXiv服务可能暂时不可用")
 
         logging.info(f"✅ ArXiv搜索完成，共找到 {len(papers)} 篇论文")
         successful_downloads = len([p for p in papers if p.get("local_pdf_path")])
