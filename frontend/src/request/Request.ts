@@ -90,7 +90,7 @@ export default async (config: Omit<MyRequestConfig, "headers"> & { headers?: any
     return { code: 200, mes: "", data: result };
   // 否则统一包装为R类
   const responseData = result.data as R;
-  // 统一处理错误，除非传入了自定义错误回调
+  // 统一处理错误，除非传入了自定义错误回调，发生错误时不会返回response
   if (responseData.code !== 200) {
     if (errorCallback) errorCallback(responseData);
     else ElMessage.error(responseData.mes);

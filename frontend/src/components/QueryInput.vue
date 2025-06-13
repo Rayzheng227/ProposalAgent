@@ -41,10 +41,13 @@ const handleKeydown = (event: any) => {
 }
 
 const send = () => {
-  if (isCountDown || (query.value != null && query.value.trim() !== "")) {
-    emit('send', query.value, isCountDown.value)
-    query.value = ""
+  if (isCountDown.value) {
     stopCountDown()
+    emit('send', (query.value == null || query.value.trim() == "") ? "用户没有补充信息" : query.value, true)
+    query.value = ""
+  } else if (query.value != null && query.value.trim() !== "") {
+    emit('send', query.value, false)
+    query.value = ""
   }
 }
 
@@ -54,10 +57,10 @@ const startCountDown = () => {
 
   if (timer.value) clearInterval(timer.value);
 
-
   timer.value = window.setInterval(() => {
     countdown.value--;
-    if (countdown.value <= 0) stopCountDown();
+    // 倒计时结束时，自动发送消息
+    if (countdown.value <= 0) send()
   }, 1000);
 }
 

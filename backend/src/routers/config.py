@@ -1,6 +1,7 @@
 import yaml
 import os
 
+
 class ServerConfig:
     """
     服务器配置
@@ -8,14 +9,12 @@ class ServerConfig:
 
     def __init__(self, load_config: bool = True):
         if load_config:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            yaml_path = os.path.join(current_dir, '..', '..', 'resource', 'config.yaml')
-            self.load_config(yaml_path)
+            self.load_config()
         else:
             self.ip = "127.0.0.1"
             self.port = 8000
 
-    def load_config(self, config_path: str):
+    def load_config(self, config_path: str = os.path.join(os.path.dirname(__file__), "../../resource/config.yaml")):
         """
         加载配置文件
         """

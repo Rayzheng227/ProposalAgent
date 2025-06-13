@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from backend.src.agent.graph import ProposalAgent
 import os
 
@@ -38,8 +40,7 @@ def agent_service(proposal_id: str, research_question: str):
     # 输出最终报告的保存路径或内容
     if result.get("final_report_markdown") and result["final_report_markdown"] != "报告生成失败":
         # 查找报告文件名，因为路径是在函数内部生成的
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        output_dir = os.path.join(current_dir, '..', '..', 'output')
+        output_dir = Path(__file__).parent.parent.parent.parent / "output"
         if os.path.exists(output_dir):
             files = sorted(os.listdir(output_dir), key=lambda x: os.path.getmtime(os.path.join(output_dir, x)),
                            reverse=True)

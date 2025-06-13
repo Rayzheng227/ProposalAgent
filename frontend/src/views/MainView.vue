@@ -41,7 +41,7 @@
             </div>
           </div>
         </div>
-        <div class="right" v-loading="isLoading" element-loading-text="正在连接服务器!"
+        <div class="right" v-loading="isLoading" element-loading-text="正在连接服务器~~"
           element-loading-background="rgba(255, 255, 255, 0.05)">
           <div v-if="activeHistoryId != null" class="communication">
             <div class="chat-records" ref="chatRecordsRef">
@@ -204,23 +204,35 @@ const send = async (query: string, isClarification: boolean) => {
         if (isFinish) {
           isChatting.value = false;
           startCountDown()
+          ws.close();
         }
       } else { // 处理AI回答消息
         const { proposalId, isFinish, step, title, content } = parsed;
         historyStore.addAIAnswerMessageChunk(proposalId, isFinish, step, title, content);
         loadHistories();
-        if (isFinish) ws.close();
+        if (isFinish) {
+          isChatting.value = false;
+          ws.close();
+        }
       }
-    }
+    },
+    onError: (err: any) => isChatting.value = false
   });
-  isChatting.value = false;
 }
 
 const refresh = (index: number) => {
   const activeHistory = histories.value.find((item) => item.id === activeHistoryId.value)
   if (activeHistory == null) return;
-  const oldQuery = activeHistory.messages[index - 1].content
-  historyStore.removeMessages(activeHistoryId.value, index - 1);
+  // 由于每个提问AI都会进行澄清提问，所有真正的问题是最近的一条AIQuestionMessage的上一条
+  let aiQuestionMessageIdx = 1;
+  for (let i = index - 1; i >= 0; i--) {
+    if (activeHistory.messages[i].role === "ai" && !((activeHistory.messages[i] as any).isAnswer)) {
+      aiQuestionMessageIdx = i;
+      break;
+    }
+  }
+  const oldQuery = activeHistory.messages[aiQuestionMessageIdx - 1].content
+  historyStore.removeMessages(activeHistoryId.value, aiQuestionMessageIdx - 1);
   loadHistories();
   send(oldQuery, false);
 }

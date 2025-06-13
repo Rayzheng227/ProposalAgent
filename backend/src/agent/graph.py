@@ -2,6 +2,7 @@
 Agent生成过程中的图相关：节点
 """
 import time
+from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
@@ -1017,18 +1018,17 @@ class ProposalAgent:
         reference_list = state.get("reference_list", [])
 
         # 创建output文件夹
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        output_dir = os.path.join(current_dir, '..', '..', 'output')
+        output_dir = Path(__file__).parent.parent.parent.parent / "output"
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
         # 用uuid替换时间戳
-        uuid = state["proposal_id"]
+        proposal_id = state["proposal_id"]
         # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_research_field = "".join(
-            c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
-        report_filename = f"Research_Proposal_{safe_research_field}_{uuid}.md"
-        references_filename = f"References_{safe_research_field}_{uuid}.json"
+        # safe_research_field = "".join(
+        #     c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
+        report_filename = f"Research_Proposal_{proposal_id}.md"
+        references_filename = f"References_{proposal_id}.json"
         report_filepath = os.path.join(output_dir, report_filename)
         references_filepath = os.path.join(output_dir, references_filename)
 
@@ -1373,8 +1373,12 @@ class ProposalAgent:
         state["history_summary"] = full_content
         logging.info(f"✅ 生成摘要完成: {full_content}")
 
-        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
-                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+        )
         return state
 
     def save_to_long_term_memory_node(self, state: ProposalState) -> ProposalState:
@@ -1532,7 +1536,21 @@ class ProposalAgent:
                 logging.info(
                     f"  文献 {i + 1}: {ref.get('title', 'Unknown')[:50]}... (评分: {ref.get('relevance_score', 0)})")
 
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+            )
+
             return final_reference_list
         else:
             logging.warning("没有评分结果，返回原始列表")
+
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
+            )
             return reference_list

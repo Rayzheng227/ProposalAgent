@@ -87,10 +87,10 @@ export const useHistoryStore = defineStore(
     const removeHistory = (id: string | null) =>
       (histories.value = histories.value.filter((h) => h.id !== id));
 
-    // 移除历史消息中的部分消息
-    const removeMessages = (id: string | null, messageIndex: number) => {
+    // 移除历史消息中指定下标后的所有消息
+    const removeMessages = (id: string | null, idx: number) => {
       const history = histories.value.find((h) => h.id === id);
-      if (history) history.messages.splice(messageIndex);
+      if (history) history.messages.splice(idx);
     };
 
     // 加载历史记录

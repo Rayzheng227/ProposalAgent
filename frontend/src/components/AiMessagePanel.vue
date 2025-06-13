@@ -4,6 +4,7 @@
     <div v-if="!props.message.isAnswer">
       <div class="header">
         <img src="/src/assets/imgs/logo.png" class="logo" />
+        <div class="process">ProposalAgent</div>
       </div>
       <div class="message-content">
         <div class="question">{{ props.message.content }}</div>
@@ -122,24 +123,36 @@ const refresh = () => {
 }
 
 const download = async (fileType: string) => {
-  const result = await proxy.Request({
-    url: proxy.Api.download,
+  const result1 = await proxy.Request({
+    url: proxy.Api.checkFileExist,
     data: {
       fileType,
       historyId: props.historyId
-    },
-    responseType: 'blob',
-    errorCallback: (errR: any) => {
-      ElMessage.error(errR.mes)
     }
   });
-  if (!result) return;
-  const url = window.URL.createObjectURL(new Blob([result.data.data]));
-  let a = document.createElement('a');
-  a.href = url;
-  a.download = `${getRandomId()}.${fileType}`;
-  a.click()
-  a.remove()
+  // 监测到文件存在，才允许下载
+  if (result1) {
+    const result2 = await proxy.Request({
+      url: proxy.Api.download,
+      data: {
+        fileType,
+        historyId: props.historyId
+      },
+      responseType: 'blob',
+      errorCallback: (errR: any) => {
+        console.log(errR)
+        ElMessage.error(errR.detail)
+      }
+    });
+    if (!result2) return;
+    const url = window.URL.createObjectURL(new Blob([result2.data.data]));
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = `${getRandomId()}.${fileType}`;
+    a.click()
+    a.remove()
+  }
+
 };
 
 </script>
@@ -156,26 +169,26 @@ const download = async (fileType: string) => {
     align-items: center;
 
     .logo {
-      width: 70px;
-      height: 70px;
+      width: 80px;
+      height: 80px;
     }
 
     .process {
-      width: 70px;
+      width: 80px;
       height: 30px;
       margin-left: 10px;
-      font-size: 16px;
+      font-size: 18px;
       line-height: 30px;
       text-align: center;
-      color: #fff;
+      color: #468bb9;
     }
 
     .toggle-btn {
       width: 0;
       height: 0;
-      border-left: 8px solid transparent;
-      border-right: 8px solid transparent;
-      border-top: 15px solid darkcyan;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-top: 18px solid darkcyan;
       margin-left: 10px;
       cursor: pointer;
 

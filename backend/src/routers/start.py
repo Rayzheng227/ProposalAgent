@@ -26,6 +26,7 @@ app.add_middleware(
 
 thread_pool = ThreadPoolExecutor(max_workers=5)
 
+
 @app.post("/sendQuery")
 async def send_query(data: dict):
     """
@@ -46,6 +47,7 @@ async def send_query(data: dict):
     else:
         def agent_task():
             agent_service(data["historyId"], data["query"])
+
         thread_pool.submit(agent_task)
 
     return R.ok()
@@ -76,6 +78,31 @@ async def stream_mes(websocket: WebSocket, history_id: str):
         await websocket.close()
 
 
+@app.post("/checkFileExist")
+async def checkFileExist(data: dict):
+    """
+    检查要下载文件是否存在
+    data:{
+        fileType: str # "pdf"或者"md"
+        historyId: str # 前端需要的唯一标记一个历史记录的id
+    }
+    """
+    if not data.get("fileType"):
+        return None
+    if not data.get("historyId"):
+        return None
+    file_type = data["fileType"]
+
+    # file_name = f"Research_Proposal_{data['historyId']}.{'pdf' if file_type == 'pdf' else 'md'}"
+    file_name = "111.md"
+    if file_type == 'pdf':
+        file_path = Path(__file__).parent.parent.parent.parent / "exporter/pdf_output" / file_name
+    else:
+        file_path = Path(__file__).parent.parent.parent.parent / "output" / file_name
+    if not os.path.exists(file_path):
+        return R.error_with_mes("文件不存在！请稍后再尝试下载")
+    return R.ok()
+
 @app.post("/download")
 async def download(data: dict):
     """
@@ -90,13 +117,12 @@ async def download(data: dict):
     if not data.get("historyId"):
         return None
     file_type = data["fileType"]
+    file_name = f"Research_Proposal_{data['historyId']}.{file_type}"
+    if file_type == 'pdf':
+        file_path = Path(__file__).parent.parent.parent.parent / "exporter/pdf_output" / file_name
+    else:
+        file_path = Path(__file__).parent.parent.parent.parent / "output" / file_name
 
-    file_name = f"Research_Proposal_{data['historyId']}.{'pdf' if file_type == 'pdf' else 'md'}"
-    # 构建输出文件夹的绝对路径
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(current_dir, '..', '..', 'output')
-    # 获取具体文件路径
-    file_path = os.path.join(output_dir, file_name)
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=500, detail="File not found")
     return FileResponse(path=file_path, filename=file_name)
