@@ -22,7 +22,7 @@ def load_review_result(review_file):
         logging.error(f"加载评审结果失败: {e}")
         return None
 
-def load_original_proposal(file_path):
+def load_original_proposal(file_path): 
     """加载原始研究计划书文件"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
