@@ -15,7 +15,7 @@
           <div class="menu" :class="{ collapsed: isCollapse }">
             <div class="head">
               <div class="logo-wrapper" :class="{ collapsed: isCollapse }">
-                <div class="label">Proposal You</div>
+                <div class="label">ProposalAgent</div>
               </div>
               <img class="action" :src="isCollapse ? '/src/assets/imgs/expand.png' : '/src/assets/imgs/collapse.png'"
                 @click="toggleCollapse" />
@@ -41,19 +41,19 @@
             </div>
           </div>
         </div>
-        <div class="right" v-loading="isLoading" element-loading-text="正在连接服务器!"
+        <div class="right" v-loading="isLoading" element-loading-text="正在连接服务器~~"
           element-loading-background="rgba(255, 255, 255, 0.05)">
           <div v-if="activeHistoryId != null" class="communication">
             <div class="chat-records" ref="chatRecordsRef">
               <div v-show="rendered"
                 v-for="(message, index) in histories.find((item) => item.id === activeHistoryId)?.messages">
                 <template v-if="message.role === 'user'">
-                  <UserMessagePanel :message="(message as UserMessage)"></UserMessagePanel>
+                  <BaseMessagePanel :message="(message as BaseMessage)"></BaseMessagePanel>
                 </template>
                 <template v-else>
-                  <AiMessagePanel :message="(message as AIMessage)" :index="index" :history-id="activeHistoryId"
-                    @refresh="refresh(index)">
-                  </AiMessagePanel>
+                  <AIMessagePanel :message="(message as (AIAnswerMessage | AIQuestionMessage))" :index="index"
+                    :history-id="activeHistoryId" @refresh="refresh(index)">
+                  </AIMessagePanel>
                 </template>
               </div>
             </div>
@@ -63,7 +63,7 @@
               </template>
               开启新对话
             </el-button>
-            <QueryInput @send="send"></QueryInput>
+            <QueryInput ref="queryInputRef" @send="send"></QueryInput>
           </div>
           <div v-else class="island">
             <div class="head">
@@ -81,22 +81,24 @@
 
 <script lang="ts" setup>
 import { ref, onMounted, nextTick, getCurrentInstance, watch } from "vue";
-import { ElMessage } from "element-plus";
-import type { History, UserMessage, AIMessage, R } from "@/common/interfaces";
+import { ElMessage } from 'element-plus';
+import type { History, BaseMessage, AIAnswerMessage, AIQuestionMessage, R } from "@/common/interfaces";
 import { getRandomId } from "@/utils/stringUtil";
 import QueryInput from "@/components/QueryInput.vue";
-import UserMessagePanel from "@/components/UserMessagePanel.vue";
-import AiMessagePanel from "@/components/AiMessagePanel.vue";
+import BaseMessagePanel from "@/components/BaseMessagePanel.vue";
+import AIMessagePanel from "@/components/AiMessagePanel.vue";
 import { useHistoryStore } from "@/stores/HistoryStore";
 
 const instance: any = getCurrentInstance();
 const proxy = instance.proxy;
+const chatRecordsRef = ref<any>(null);
+const queryInputRef = ref<any>(null);
+
 const historyStore = useHistoryStore();
 const isCollapse = ref(false);
 const rendered = ref(false);
 const histories = ref<History[]>([]);
 const activeHistoryId = ref<string | null>(null);
-const chatRecordsRef = ref<HTMLElement | null>(null);
 const isChatting = ref<boolean>(false);
 const isUserScrolling = ref(false);
 const isLoading = ref(false);
@@ -116,6 +118,7 @@ const loadHistories = () => {
 }
 
 const switchHistory = (id: string) => {
+  if (id === activeHistoryId.value) return;
   rendered.value = false; // 切换时先隐藏消息
   activeHistoryId.value = id;
   loadHistories();
@@ -132,7 +135,7 @@ const removeHistory = (id: string) => {
 
 const toIsland = () => activeHistoryId.value = null;
 
-const send = async (query: string) => {
+const send = async (query: string, isClarification: boolean) => {
   // 如果当前正在发送消息，则不允许发送操作
   if (isChatting.value) return;
   // 如果当前是新的对话，则记录到历史记录中
@@ -157,7 +160,8 @@ const send = async (query: string) => {
     url: proxy.Api.sendQuery,
     data: {
       query: realQuery,
-      historyId: activeHistoryId.value
+      historyId: activeHistoryId.value,
+      isClarification
     },
     errorCallback: (errR: any) => {
       ElMessage.error(errR.mes)
@@ -174,12 +178,12 @@ const send = async (query: string) => {
   if (activeHistory.title === "")
     activeHistory.title = query.substring(0, 10);
   // 记录消息
-  let message: UserMessage = {
+  let message: BaseMessage = {
     sendTime: new Date().toDateString(),
     role: "user",
     content: query
   }
-  historyStore.addUserMessage(activeHistory.id, message);
+  historyStore.addBaseMessage(activeHistory.id, message);
   loadHistories();
 
   // WS连接实时接收最新消息，添加到消息列表中
@@ -192,50 +196,48 @@ const send = async (query: string) => {
         isLoading.value = false
         isUserScrolling.value = false;
       }
-      const { proposalId, step, content } = JSON.parse(r.data)
-      if (step == 0)
-        ws.close();
-      else {
-        historyStore.addAiMessageChunk(proposalId, step, content);
+      const parsed = JSON.parse(r.data)
+      if (!parsed.isAnswer) {  // 处理AI询问消息
+        const { proposalId, isFinish, content } = parsed;
+        historyStore.addAIQuestionMessageChunk(proposalId, isFinish, content);
         loadHistories();
+        if (isFinish) {
+          isChatting.value = false;
+          startCountDown()
+          ws.close();
+        }
+      } else { // 处理AI回答消息
+        const { proposalId, isFinish, step, title, content } = parsed;
+        historyStore.addAIAnswerMessageChunk(proposalId, isFinish, step, title, content);
+        loadHistories();
+        if (isFinish) {
+          isChatting.value = false;
+          ws.close();
+        }
       }
-    }
+    },
+    onError: (err: any) => isChatting.value = false
   });
-
-  // isUserScrolling.value = false;
-  // let i = 0;
-  // let step = 1;
-  // setTimeout(() => {
-  //   setInterval(() => {
-  //     if (i == 14) {
-  //       i = 0;
-  //       step += 1;
-  //       if (step == 10) step = 0;
-  //     }
-  //     isLoading.value = false
-  //     const proposalId = activeHistoryId.value!
-  //     const content = "这是一个测试消息这是一个测试消息这是一个测试消息\n"
-  //     historyStore.addAiMessageChunk(proposalId, step, content);
-  //     loadHistories();
-  //     if (step == 0) {
-  //       isChatting.value = false;
-  //       isLoading.value = false;
-  //       return;
-  //     }
-  //     i++;
-  //   }, 100);
-  // }, 500)
-  isChatting.value = false;
 }
 
 const refresh = (index: number) => {
   const activeHistory = histories.value.find((item) => item.id === activeHistoryId.value)
   if (activeHistory == null) return;
-  const oldQuery = activeHistory.messages[index - 1].content
-  historyStore.removeMessages(activeHistoryId.value, index - 1);
+  // 由于每个提问AI都会进行澄清提问，所有真正的问题是最近的一条AIQuestionMessage的上一条
+  let aiQuestionMessageIdx = 1;
+  for (let i = index - 1; i >= 0; i--) {
+    if (activeHistory.messages[i].role === "ai" && !((activeHistory.messages[i] as any).isAnswer)) {
+      aiQuestionMessageIdx = i;
+      break;
+    }
+  }
+  const oldQuery = activeHistory.messages[aiQuestionMessageIdx - 1].content
+  historyStore.removeMessages(activeHistoryId.value, aiQuestionMessageIdx - 1);
   loadHistories();
-  send(oldQuery);
+  send(oldQuery, false);
 }
+
+const startCountDown = () => queryInputRef.value.startCountDown();
 
 // 滚动事件处理函数
 const handleScroll = () => {
@@ -275,8 +277,8 @@ const randomNameElementSpeed = () => {
     if (nameElements.value.length === 0) return;
     // 为每个名字设置随机动画速度，范围10s-20s
     nameElements.value.forEach(name => {
-      const minSpeed = 15; // 最小动画时长
-      const maxSpeed = 30; // 最大动画时长
+      const minSpeed = 20; // 最小动画时长
+      const maxSpeed = 50; // 最大动画时长
       const randomSpeed = minSpeed + Math.random() * (maxSpeed - minSpeed);
       name.style.animationDuration = `${randomSpeed}s`;
     });
@@ -322,7 +324,6 @@ onMounted(() => {
     color: #444;
     white-space: nowrap;
     overflow: hidden;
-    filter: blur(5px);
 
     .name {
       animation: scroll linear infinite;
@@ -360,7 +361,7 @@ onMounted(() => {
       height: 97%;
       border-width: 2px;
       border-radius: 20px;
-      box-shadow: -4px -4px 16px 0px rgba(255, 255, 255, 0.3);
+      box-shadow: -6px -6px 24px 4px rgba(255, 255, 255, 0.3);
 
       .left-top-hole {
         position: absolute;
@@ -424,16 +425,15 @@ onMounted(() => {
       .left-menu {
         display: flex;
         flex-direction: column;
-        flex: 1;
-        max-width: 250px;
         height: calc(100% - 100px);
         padding-left: 20px;
+        backdrop-filter: blur(4px);
 
         .menu {
           display: flex;
           flex-direction: column;
           align-items: center;
-          width: 100%;
+          width: 250px;
           height: 100%;
           border-radius: 30px;
           box-shadow: inset -4px -4px 12px 2px rgba(255, 255, 255, 0.3);
@@ -454,20 +454,22 @@ onMounted(() => {
               overflow: hidden;
               transition: width 0.3s ease;
               width: 140px;
+              margin-right: 10px;
 
               &.collapsed {
                 width: 0;
+                margin-right: 0;
               }
-            }
 
-            .label {
-              display: inline-block;
-              text-align: center;
-              font-size: 22px;
-              font-weight: bold;
-              font-family: "Times New Roman", Times, serif;
-              color: skyblue;
-              white-space: nowrap;
+              .label {
+                display: inline-block;
+                text-align: center;
+                font-size: 22px;
+                font-weight: bold;
+                font-family: "Times New Roman", Times, serif;
+                color: skyblue;
+                white-space: nowrap;
+              }
             }
 
             .action {
@@ -478,6 +480,7 @@ onMounted(() => {
                 cursor: pointer;
               }
             }
+
           }
 
           .new-dialog {
@@ -607,14 +610,14 @@ onMounted(() => {
             justify-content: center;
 
             .logo {
-              width: 70px;
+              width: 80px;
             }
 
             .hello {
               font-size: 24px;
               font-weight: bold;
               font-family: "Arial", sans-serif;
-              margin-left: 20px;
+              margin-left: 10px;
             }
           }
 
@@ -640,6 +643,7 @@ onMounted(() => {
             flex-direction: column;
             width: 100%;
             height: 80%;
+            border-bottom: 1px solid #333;
             color: #fff;
             overflow: auto;
           }
@@ -647,6 +651,7 @@ onMounted(() => {
           .new-dialog {
             width: 200px;
             height: 50px;
+            margin-top: 10px;
             text-align: center;
             font-size: 16px;
             color: #cccccc;

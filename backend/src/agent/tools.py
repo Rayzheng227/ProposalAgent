@@ -2,6 +2,8 @@
 过程中涉及到的一些工具，工具相关配置见:tools.json
 """
 from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError as FuturesTimeoutError
+from pathlib import Path
+
 import arxiv
 from langchain_core.tools import tool
 import logging
@@ -69,7 +71,7 @@ def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool =
                         sort_by=arxiv.SortCriterion.SubmittedDate
                     )
 
-                    papers_dir = "./Papers"
+                    papers_dir = Path(__file__).parent.parent.parent.parent / "Papers"
                     if not os.path.exists(papers_dir):
                         os.makedirs(papers_dir)
 

@@ -1,41 +1,53 @@
 <template>
   <div class="message-container">
-    <div class="header">
-      <img src="/src/assets/imgs/logo.png" class="logo" />
-      <div class="process">运行流程</div>
-      <div class="toggle-btn" @click="toggleCollapse" :style="toggleBtnStyle"></div>
-    </div>
-    <div class="message-content" :class="{ collapsed: isCollapsed }">
-      <div v-for="i in 9" :key="i">
-        <template v-if="(props.message as any)[stepStyles[i - 1]['propertyName']] !== ''">
-          <div class=" title" :style="stepStyles[i - 1].titleStyle">{{ stepStyles[i - 1].stepTitle }}
-          </div>
-          <div class="content" :style="stepStyles[i - 1].contentStyle">
-            {{ (props.message as any)[stepStyles[i - 1]["propertyName"]] }}
-            <!-- 判断当前content的最后一个字符是否是"~"，是的话显示加载中的gif -->
-            <img v-if="(props.message as any)[stepStyles[i - 1]['propertyName']].slice(-1) === '~'" class="wait"
-              src="/src/assets/imgs/textLoading.gif" />
-          </div>
-        </template>
+    <!-- 询问消息 -->
+    <div v-if="!props.message.isAnswer">
+      <div class="header">
+        <img src="/src/assets/imgs/logo.png" class="logo" />
+        <div class="process">ProposalAgent</div>
+      </div>
+      <div class="message-content">
+        <div class="question">{{ props.message.content }}</div>
+      </div>
+      <div v-if="!props.message.isFinish" class="final-info">
+        ✅ 当你看到这条消息时，如果任务还在执行中，请耐心等待~~
+        <br />
+        ❌ 否则说明已发生错误，请稍后重新发起提问
+      </div>
+      <div class="action-bar">
+        <img class="icon-copy" src="/src/assets/imgs/copy.png" title="复制" @click="copyMessage" />
       </div>
     </div>
-    <div v-if="message.step_9_content == ''" class="final-info">
-      ✅ 当你看到这条消息时，如果任务还在执行中，请耐心等待~~
-      <br />
-      ❌ 否则说明已发生错误，请稍后重新发起提问
+    <!-- 回复消息 -->
+    <div v-else>
+      <div class="header">
+        <img src="/src/assets/imgs/logo.png" class="logo" />
+        <div class="process">运行流程</div>
+        <div class="toggle-btn" @click="toggleCollapse" :style="toggleBtnStyle"></div>
+      </div>
+      <div class="message-content" :class="{ collapsed: isCollapsed }">
+        <div v-for="step, index in (props.message as AIAnswerMessage).steps" :key="step.title">
+          <div :style="stepStyles[index % stepStyles.length].titleStyle" class="title">{{ step.title }}</div>
+          <div :style="stepStyles[index % stepStyles.length].contentStyle" class="content">
+            {{ step.content }}
+          </div>
+        </div>
+      </div>
+      <div v-if="!props.message.isFinish" class="final-info">
+        当你看到这条消息时，如果任务还在执行中，请耐心等待~~
+        <img class="wait" src="/src/assets/imgs/textLoading.gif" />
+      </div>
+      <div v-else class="download-bar">
+        <span class="info">任务执行完成，点击右边按钮下载最终报告吧！</span>
+        <img class="icon-pdf" src="/src/assets/imgs/pdf.png" @click="download('pdf')" />
+        <img class="icon-md" src="/src/assets/imgs/markdown.png" @click="download('md')" />
+      </div>
+      <div class="action-bar">
+        <img class="icon-copy" src="/src/assets/imgs/copy.png" title="复制" @click="copyMessage" />
+        <img class="icon-refresh" src="/src/assets/imgs/refresh.png" title="重新生成" @click="refresh" />
+      </div>
     </div>
-    <div v-else-if="!message.step_9_content.includes('✅')" class="final-info">
-      ❌ 任务执行失败，请稍后重新发起提问
-    </div>
-    <div v-else class="download-bar">
-      <span class="info">任务执行完成，点击右边按钮下载最终报告吧！</span>
-      <img class="icon-pdf" src="/src/assets/imgs/pdf.png" @click="download('pdf')" />
-      <img class="icon-md" src="/src/assets/imgs/markdown.png" @click="download('md')" />
-    </div>
-    <div class="action-bar">
-      <img class="icon-copy" src="/src/assets/imgs/copy.png" title="复制" @click="copyMessage" />
-      <img class="icon-refresh" src="/src/assets/imgs/refresh.png" title="重新生成" @click="refresh" />
-    </div>
+
   </div>
 </template>
 
@@ -43,7 +55,7 @@
 import { ref, computed, getCurrentInstance } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getRandomId } from '@/utils/stringUtil';
-import type { AIMessage } from '@/common/interfaces'
+import type { AIAnswerMessage, AIQuestionMessage } from '@/common/interfaces'
 
 const instance: any = getCurrentInstance();
 const proxy = instance.proxy;
@@ -51,101 +63,33 @@ const proxy = instance.proxy;
 const props = defineProps<{
   index: number,
   historyId: string,
-  message: AIMessage
+  message: AIAnswerMessage | AIQuestionMessage
 }>()
 
 const stepStyles = [
   {
-    "propertyName": "step_1_content",
-    "stepTitle": "**[任务规划]**",
     "titleStyle": {
-      "border": "none"
+      "color": "skyblue"
     },
-    "contentStyle": {}
+    "contentStyle": {
+      "color": "#aaa"
+    }
   },
   {
-    "propertyName": "step_2_content",
-    "stepTitle": "**[步骤划分]**",
-    "titleStyle": {},
-    "contentStyle": {}
-  }, {
-    "propertyName": "step_3_content",
-    "stepTitle": "**[调用工具]**",
     "titleStyle": {
       "color": "darkcyan",
     },
     "contentStyle": {
-      "fontSize": "16px",
-      "lineHeight": "2"
+      "color": "#bbb"
     }
   }, {
-    "propertyName": "step_4_content",
-    "stepTitle": "**[生成引言]**",
     "titleStyle": {
       "color": "darkgoldenrod",
     },
     "contentStyle": {
-      "color": "#bbb",
-      "fontSize": "15px",
-      "lineHight": "1.5"
+      "color": "#ccc"
     }
-  }, {
-    "propertyName": "step_5_content",
-    "stepTitle": "**[生成编号引用]**",
-    "titleStyle": {
-      "color": "darkgoldenrod",
-    },
-    "contentStyle": {
-      "color": "#bbb",
-      "fontSize": "15px",
-      "lineHight": "1.5"
-    }
-  }, {
-    "propertyName": "step_6_content",
-    "stepTitle": "**[生成主体内容]**",
-    "titleStyle": {
-      "color": "darkgoldenrod",
-    },
-    "contentStyle": {
-      "color": "#bbb",
-      "fontSize": "15px",
-      "lineHight": "1.5"
-    }
-  }, {
-    "propertyName": "step_7_content",
-    "stepTitle": "**[生成结论]**",
-    "titleStyle": {
-      "color": "darkgoldenrod",
-    },
-    "contentStyle": {
-      "color": "#bbb",
-      "fontSize": "15px",
-      "lineHight": "1.5"
-    }
-  }, {
-    "propertyName": "step_8_content",
-    "stepTitle": "**[生成参考文献]**",
-    "titleStyle": {
-      "color": "darkgoldenrod",
-    },
-    "contentStyle": {
-      "color": "#bbb",
-      "fontSize": "15px",
-      "lineHight": "1.5"
-    }
-  },
-  {
-    "propertyName": "step_9_content",
-    "stepTitle": "**[生成最终报告]**",
-    "titleStyle": {
-      "color": "green",
-    },
-    "contentStyle": {
-      "color": "#e99a4c",
-      "fontSize": "16px",
-      "lineHeight": "1.5"
-    }
-  },
+  }
 ]
 const isCollapsed = ref(false)
 
@@ -179,24 +123,36 @@ const refresh = () => {
 }
 
 const download = async (fileType: string) => {
-  const result = await proxy.Request({
-    url: proxy.Api.download,
+  const result1 = await proxy.Request({
+    url: proxy.Api.checkFileExist,
     data: {
       fileType,
       historyId: props.historyId
-    },
-    responseType: 'blob',
-    errorCallback: (errR: any) => {
-      ElMessage.error(errR.mes)
     }
   });
-  if (!result) return;
-  const url = window.URL.createObjectURL(new Blob([result.data.data]));
-  let a = document.createElement('a');
-  a.href = url;
-  a.download = `${getRandomId()}.${fileType}`;
-  a.click()
-  a.remove()
+  // 监测到文件存在，才允许下载
+  if (result1) {
+    const result2 = await proxy.Request({
+      url: proxy.Api.download,
+      data: {
+        fileType,
+        historyId: props.historyId
+      },
+      responseType: 'blob',
+      errorCallback: (errR: any) => {
+        console.log(errR)
+        ElMessage.error(errR.detail)
+      }
+    });
+    if (!result2) return;
+    const url = window.URL.createObjectURL(new Blob([result2.data.data]));
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = `${getRandomId()}.${fileType}`;
+    a.click()
+    a.remove()
+  }
+
 };
 
 </script>
@@ -213,28 +169,26 @@ const download = async (fileType: string) => {
     align-items: center;
 
     .logo {
-      width: 60px;
-      height: 60px;
-
-
+      width: 80px;
+      height: 80px;
     }
 
     .process {
-      width: 70px;
+      width: 80px;
       height: 30px;
       margin-left: 10px;
-      font-size: 16px;
+      font-size: 18px;
       line-height: 30px;
       text-align: center;
-      color: #fff;
+      color: #468bb9;
     }
 
     .toggle-btn {
       width: 0;
       height: 0;
-      border-left: 8px solid transparent;
-      border-right: 8px solid transparent;
-      border-top: 15px solid darkcyan;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-top: 18px solid darkcyan;
       margin-left: 10px;
       cursor: pointer;
 
@@ -257,6 +211,14 @@ const download = async (fileType: string) => {
     word-break: break-all;
     overflow: hidden;
     transition: all 1s ease;
+    backdrop-filter: blur(8px);
+
+    .question {
+      font-size: 16px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.5;
+      color: #ffd67d;
+    }
 
     .title {
       height: 30px;
@@ -264,21 +226,15 @@ const download = async (fileType: string) => {
       border-top: 1px solid #777;
       font-size: 18px;
       font-weight: bold;
-      color: rgb(102, 150, 167)
+      color: skyblue;
     }
 
     .content {
       margin-bottom: 10px;
-      font-size: 14px;
+      font-size: 15px;
       font-family: '微软雅黑';
       line-height: 1.3;
       color: #aaa;
-
-      .wait {
-        display: inline-block;
-        vertical-align: middle;
-        width: 25px;
-      }
     }
 
     &.collapsed {
@@ -296,6 +252,13 @@ const download = async (fileType: string) => {
     font-family: Arial, Helvetica, sans-serif;
     font-weight: bold;
     color: #aaa;
+
+
+    .wait {
+      display: inline-block;
+      vertical-align: middle;
+      width: 25px;
+    }
   }
 
   .download-bar {

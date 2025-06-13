@@ -4,5 +4,6 @@ export default {
   loadMessageStream: "ws://localhost:8810/ws",
   // http
   sendQuery: "/sendQuery",
+  checkFileExist: "/checkFileExist",
   download: "/download",
 };

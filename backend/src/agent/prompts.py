@@ -74,7 +74,7 @@ Each step should be:
 **Strategy for PDF Analysis:**
 1. First search and download relevant papers using arxiv or crossref tools
 2. For the most important/relevant papers, use summarize_pdf to get detailed analysis
-3. Use the PDF path from the download results (usually in "./Papers/" directory)
+3. Use the PDF path from the download results (usually in "./papers/" directory)
 
 Please return your output in the following **strict JSON format**:
 
@@ -91,7 +91,7 @@ Please return your output in the following **strict JSON format**:
     {{
       "step_id": 2,
       "action": "summarize_pdf",
-      "parameters": {{"path": "./Papers/2025.12345v1_Example_Paper.pdf"}},
+      "parameters": {{"path": "./papers/2025.12345v1_Example_Paper.pdf"}},
       "description": "Summarize the most relevant downloaded paper",
       "expected_outcome": "Get detailed analysis of key research findings"
     }}
