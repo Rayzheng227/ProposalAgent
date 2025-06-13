@@ -4,28 +4,28 @@ Agent生成过程中的图相关：节点
 import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import tool
+# from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from langgraph.graph.state import CompiledStateGraph
+# from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict, List, Dict, Any
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+# from reportlab.lib.pagesizes import letter
+# from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+# from reportlab.lib.styles import getSampleStyleSheet
 import json
 import os
-from datetime import datetime
+# from datetime import datetime
 import logging
 from backend.src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
-import fitz
+# import fitz
 from dotenv import load_dotenv
-from .tools import search_arxiv_papers_tool,  search_crossref_papers_tool,  search_web_content_tool,  summarize_pdf
+from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf
 from .state import ProposalState
 from backend.src.utils.queue_util import QueueUtil
-from backend.src.utils.stream_mes_util import stream_mes_2_full_content
-from ..entity.stream_mes import StreamMes
+from backend.src.utils.stream_mes_util import StreamUtil
+from ..entity.stream_mes import StreamAnswerMes, StreamClarifyMes
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -41,7 +41,6 @@ logging.basicConfig(
         logging.StreamHandler(),  # 输出到控制台
     ]
 )
-
 
 
 class ProposalAgent:
@@ -117,37 +116,60 @@ class ProposalAgent:
         return tools_text
 
     def clarify_research_focus_node(self, state: ProposalState) -> ProposalState:
-        """根据研究领域生成澄清问题，或处理用户提供的澄清信息"""
+        """根据研究领域生成澄清问题，并等待用户输入最多60秒"""
         research_field = state["research_field"]
-        user_clarifications = state.get("user_clarifications", "")
-        existing_questions = state.get("clarification_questions", [])
-        revision_guidance = state.get("revision_guidance", "")
-        
-        # 如果有修订指导，跳过生成澄清问题
-        if revision_guidance:
-            logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
-            state["clarification_questions"] = []
-            return state
-        
-        # 原有逻辑保持不变
-        if user_clarifications:
-            logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
-            # 用户已提供澄清，无需再生成问题
-            state["clarification_questions"] = []  # 清空旧问题（如果有）
-            return state
 
-        if existing_questions:
-            logging.info("📝 已存在澄清问题，等待用户回应。")
-            # 如果已有问题但无用户回应，则不重复生成
-            return state
+        # user_clarifications = state.get("user_clarifications", "")
+        # existing_questions = state.get("clarification_questions", [])
+        # revision_guidance = state.get("revision_guidance", "")
 
+        # # 如果有修订指导，跳过生成澄清问题
+        # if revision_guidance:
+        #     logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
+        #     state["clarification_questions"] = []
+        #     return state
+        #
+        # # 原有逻辑保持不变
+        # if user_clarifications:
+        #     logging.info(f"🔍 用户已提供研究方向的澄清信息: {user_clarifications[:200]}...")
+        #     # 用户已提供澄清，无需再生成问题
+        #     state["clarification_questions"] = []  # 清空旧问题（如果有）
+        #     return state
+        #
+        # if existing_questions:
+        #     logging.info("📝 已存在澄清问题，等待用户回应。")
+        #     # 如果已有问题但无用户回应，则不重复生成
+        #     return state
+        #
+        # logging.info(f"🤔 正在为研究领域 '{research_field}' 生成澄清性问题...")
+        #
+        # prompt = CLARIFICATION_QUESTION_PROMPT.format(research_field=research_field)
+        # response = self.llm.invoke([HumanMessage(content=prompt)])
+        #
+        # generated_questions_text = response.content.strip()
+        # questions = [q.strip() for q in generated_questions_text.split('\n') if q.strip()]
+        #
+        # if questions:
+        #     state["clarification_questions"] = questions
+        #     logging.info("✅ 成功生成澄清性问题：")
+        #     for i, q in enumerate(questions):
+        #         logging.info(f"  {i + 1}. {q}")
+        #     logging.info("📢 请用户针对以上问题提供回应，并在下次请求时通过 'user_clarifications' 字段传入。")
+        # else:
+        #     logging.warning("⚠️ 未能从LLM响应中解析出澄清性问题。")
+        #     state["clarification_questions"] = []
+        #
+        # return state
+
+        # 生成新的澄清问题
         logging.info(f"🤔 正在为研究领域 '{research_field}' 生成澄清性问题...")
 
         prompt = CLARIFICATION_QUESTION_PROMPT.format(research_field=research_field)
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-
-        generated_questions_text = response.content.strip()
-        questions = [q.strip() for q in generated_questions_text.split('\n') if q.strip()]
+        full_content = StreamUtil.transfer_stream_clarify_mes(
+            stream_res=self.llm.stream([HumanMessage(prompt)]),
+            proposal_id=state["proposal_id"]
+        )
+        questions = [q.strip() for q in full_content.split('\n') if q.strip()]
 
         if questions:
             state["clarification_questions"] = questions
@@ -159,10 +181,28 @@ class ProposalAgent:
             logging.warning("⚠️ 未能从LLM响应中解析出澄清性问题。")
             state["clarification_questions"] = []
 
+        # 等待用户输入最多60秒
+        wait_seconds = 60
+        logging.info(f"⏳ 开始等待用户输入，最长 {wait_seconds} 秒...")
+
+        for i in range(wait_seconds):
+            # 检查是否有用户输入
+            user_clarification = QueueUtil.get_clarification(state["proposal_id"])
+            if user_clarification:
+                state["user_clarifications"] = user_clarification
+                logging.info(f"✅ 在等待 {i + 1} 秒后检测到用户输入，立即返回")
+                return state
+            # 每秒检查一次
+            time.sleep(1)
+
+        logging.info(f"⏰ 已等待 {wait_seconds} 秒，未收到用户输入")
         return state
 
     def create_master_plan_node(self, state: ProposalState) -> ProposalState:
         """首先基于问题去创建一个总体的规划"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         research_field_original = state["research_field"]
         user_clarifications = state.get("user_clarifications", "")
         revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
@@ -209,27 +249,27 @@ class ProposalAgent:
         # --- 从长期记忆中检索相关信息 ---
         logging.info(f"🔍 正在从长期记忆中检索与 '{research_field_original}' 相关的信息...")
         try:
-            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2) # 检索最相关的2个
+            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2)  # 检索最相关的2个
         except Exception as e:
             logging.warning(f"⚠️ 从长期记忆中检索信息失败: {e}")
             retrieved_docs = []
-        
+
         retrieved_knowledge_text = ""
         if retrieved_docs:
             logging.info(f"✅ 从长期记忆中检索到 {len(retrieved_docs)} 条相关记录。")
             retrieved_knowledge_text += "\n\n### 供参考的历史研究项目摘要\n"
             retrieved_knowledge_text += "这是过去完成的类似研究项目，你可以借鉴它们的思路和结论，但不要照搬。\n"
             for i, doc in enumerate(retrieved_docs):
-                retrieved_knowledge_text += f"\n--- 相关历史项目 {i+1} ---\n"
+                retrieved_knowledge_text += f"\n--- 相关历史项目 {i + 1} ---\n"
                 retrieved_knowledge_text += doc.page_content
                 retrieved_knowledge_text += "\n--------------------------\n"
         # ------------------------------------
 
         # 构建提示文本
         prompt_additions = []
-        
+
         if user_clarifications:
-            clarification_text= (
+            clarification_text = (
                 f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
                 f"{user_clarifications}\n"
             )
@@ -242,24 +282,24 @@ class ProposalAgent:
             lines = revision_guidance.split("\n")
             in_key_issues = False
             count = 0
-            
+
             for line in lines:
                 if "需要改进的关键问题" in line:
                     in_key_issues = True
                     revision_summary += line + "\n"
                     continue
-                
+
                 if in_key_issues and line.strip() and not line.startswith("##"):
                     revision_summary += line + "\n"
                     count += 1
-                    
+
                 if count > 5 or (in_key_issues and line.startswith("##")):
                     in_key_issues = False
-                    
+
             if not revision_summary:
                 # 如果没有提取到关键问题，使用前500个字符作为摘要
                 revision_summary = revision_guidance[:500] + "...(更多详细修订建议)"
-                
+
             revision_text = (
                 f"\n\n修订指导：请根据以下修订建议调整研究计划，保留原计划的优势并改进不足：\n"
                 f"{revision_summary}\n"
@@ -268,7 +308,7 @@ class ProposalAgent:
             logging.info("📝 使用评审反馈的修订指导来改进计划。")
 
         # 构建完整提示
-        base_prompt_template = master_plan_instruction # 从 prompts.py 导入
+        base_prompt_template = master_plan_instruction  # 从 prompts.py 导入
 
         lines = base_prompt_template.splitlines()
         new_lines = []
@@ -279,14 +319,14 @@ class ProposalAgent:
                 # 在包含 {research_field} 的行之后插入提示信息
                 new_lines.extend(prompt_additions)
                 inserted = True
-        
-        if not inserted and prompt_additions: # 后备：如果占位符未找到，则追加
+
+        if not inserted and prompt_additions:  # 后备：如果占位符未找到，则追加
             new_lines.extend(prompt_additions)
-            
+
         modified_master_plan_prompt_template = "\n".join(new_lines)
-        
+
         master_planning_prompt = modified_master_plan_prompt_template.format(
-            research_field=research_field_original, # 此处使用原始研究领域
+            research_field=research_field_original,  # 此处使用原始研究领域
             tools_info=tools_info
         )
 
@@ -298,10 +338,15 @@ class ProposalAgent:
         )
 
         logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清和历史知识) 制定总体研究计划...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 2,
-                                                 self.llm.stream([HumanMessage(content=master_planning_prompt)]))
+
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(master_planning_prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成计划"
+        )
+
         state["research_plan"] = full_content
-        # response = self.llm.invoke([HumanMessage(content=final_prompt)])
 
         # state["research_plan"] = response.content
         state["available_tools"] = self.tools_description
@@ -313,27 +358,33 @@ class ProposalAgent:
         logging.info("✅ 总体研究计划制定完成")
         logging.info(f"研究计划内容 (部分): {state['research_plan'][:300]}...")
 
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
+
         return state
 
     # Ensure this method is correctly indented as part of the ProposalAgent class
-    def _decide_after_clarification(self, state: ProposalState) -> str:
-        """确定澄清节点后的下一步。"""
-        revision_guidance = state.get("revision_guidance", "")
-        
-        # 如果有修订指导，直接进入下一步
-        if revision_guidance:
-            logging.info("✅ 检测到修订指导，直接进入计划生成阶段。")
-            return "proceed_to_master_plan"
-            
-        # 原有逻辑
-        if state.get("clarification_questions") and not state.get("user_clarifications"):
-            logging.info("❓ Clarification questions generated. Waiting for user input.")
-            return "end_for_user_input"
-        logging.info("✅ No clarification needed or clarifications provided. Proceeding to master plan.")
-        return "proceed_to_master_plan"
+    # def _decide_after_clarification(self, state: ProposalState) -> str:
+    #     """确定澄清节点后的下一步。"""
+    #     revision_guidance = state.get("revision_guidance", "")
+    #
+    #     # 如果有修订指导，直接进入下一步
+    #     if revision_guidance:
+    #         logging.info("✅ 检测到修订指导，直接进入计划生成阶段。")
+    #         return "proceed_to_master_plan"
+    #
+    #     # 原有逻辑
+    #     if state.get("clarification_questions") and not state.get("user_clarifications"):
+    #         logging.info("❓ Clarification questions generated. Waiting for user input.")
+    #         return "end_for_user_input"
+    #     logging.info("✅ No clarification needed or clarifications provided. Proceeding to master plan.")
+    #     return "proceed_to_master_plan"
 
     def plan_analysis_node(self, state: ProposalState) -> ProposalState:
         """解析研究计划,生成可执行步骤"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         research_field = state["research_field"]
         research_plan = state["research_plan"]
         tools_info = self.get_tools_info_text()
@@ -363,8 +414,12 @@ class ProposalAgent:
             memory_text=memory_text
         )
         logging.info("🔍 Agent正在分析计划并生成执行步骤...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 1,
-                                                 self.llm.stream([HumanMessage(content=plan_analysis_prompt)]))
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(plan_analysis_prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="制定步骤"
+        )
         # logging.info("生成计划", response.content)
         try:
             # 解析JSON响应
@@ -399,6 +454,8 @@ class ProposalAgent:
 
         logging.info(f"✅ 生成了 {len(state['execution_plan'])} 个执行步骤")
 
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def execute_step_node(self, state: ProposalState) -> ProposalState:
@@ -476,10 +533,20 @@ class ProposalAgent:
 
     def add_references_from_data(self, state: ProposalState) -> ProposalState:
         """从收集的数据中提取并添加参考文献"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         arxiv_papers = state.get("arxiv_papers", [])
         web_results = state.get("web_search_results", [])
         reference_list = state.get("reference_list", [])
         ref_counter = state.get("ref_counter", 1)
+
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="参考文献处理",
+            content=f"\n开始处理~"
+        ))
 
         # 处理ArXiv论文
         for paper in arxiv_papers:
@@ -500,6 +567,13 @@ class ProposalAgent:
                         "summary": paper.get('detailed_summary', paper.get('summary', ''))  # 优先使用详细摘要
                     })
                     ref_counter += 1
+
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="参考文献处理",
+            content=f"\n✅ 成功处理Arxiv论文，共 {len(arxiv_papers)} 篇",
+        ))
 
         # 处理网络搜索结果和CrossRef结果
         for result in web_results:
@@ -530,18 +604,31 @@ class ProposalAgent:
                         })
                     ref_counter += 1
 
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="参考文献处理",
+            content=f"\n✅ 成功处理网络结果和CrossRef论文，共 {len(web_results)} 篇",
+        ))
+
         state["reference_list"] = reference_list
         state["ref_counter"] = ref_counter
-        QueueUtil.push_mes(
-            StreamMes(state["proposal_id"], 3, f"\n✅ 成功处理下载的参考论文/网页资源"))
 
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="参考文献处理",
+            content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
+        ))
         return state
 
-    def get_literature_summary_with_refs(self, state: ProposalState, step: int) -> str:
+    def get_literature_summary_with_refs(self, state: ProposalState) -> str:
         """获取带有统一编号的文献摘要"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         reference_list = state.get("reference_list", [])
         literature_summary = ""
-
 
         # 按类型分组显示
         arxiv_refs = [ref for ref in reference_list if ref.get("type") == "ArXiv"]
@@ -555,6 +642,12 @@ class ProposalAgent:
                 literature_summary += f"   发表时间: {ref['published']}\n"
                 literature_summary += f"   摘要: {ref['summary']}\n"
                 literature_summary += f"   分类: {', '.join(ref['categories'])}\n\n"
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="引用编号处理",
+                content=f"\n✅ 成功生成Arxiv论文引用编号，共 {len(arxiv_refs)} 篇",
+            ))
 
         if web_refs:
             literature_summary += "\n**相关网络信息：**\n"
@@ -563,12 +656,26 @@ class ProposalAgent:
                 literature_summary += f"   来源: {ref['url']}\n"
                 literature_summary += f"   内容摘要: {ref['content_preview']}...\n\n"
 
-        QueueUtil.push_mes(StreamMes(state["proposal_id"], step, "\n✅ 成功生成引用编号\n"))
-        return literature_summary
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="引用编号处理",
+                content=f"\n✅ 成功生成网络资源和CrossRef论文引用编号，共 {len(web_refs)} 篇",
+            ))
 
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="引用编号处理",
+            content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
+        ))
+        return literature_summary
 
     def generate_reference_section(self, state: ProposalState) -> str:
         """生成格式化的参考文献部分"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         reference_list = state.get("reference_list", [])
 
         if not reference_list:
@@ -593,19 +700,27 @@ class ProposalAgent:
                 # 网络资源格式
                 ref_text += f"[{ref['id']}] {ref['title']}. 访问时间: {datetime.now().strftime('%Y-%m-%d')}. URL: {ref['url']}\n\n"
 
-        QueueUtil.push_mes(
-            StreamMes(state["proposal_id"], 8, "\n✅ 成功生成参考文献"))
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="格式化文献",
+            content=f"\n✅ 成功生成格式化格式化后的参考文献，共 {len(reference_list)} 篇，共耗时 {time.time() - start_time:.2f}s",
+        ))
         return ref_text
 
     def write_introduction_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的引言部分"""
+
         research_field = state["research_field"]
         research_plan = state["research_plan"]
 
-        rank_reference_list = self.rerank_with_llm(state["research_field"], state["reference_list"])
+        rank_reference_list = self.rerank_with_llm(state)
         state["reference_list"] = rank_reference_list
         # 使用统一的文献摘要
         literature_summary = self.get_literature_summary_with_refs(state)
+
+        state["global_step_num"] += 1
+        start_time = time.time()
 
         citation_instruction = """
         **引用要求：**
@@ -641,15 +756,19 @@ class ProposalAgent:
         7. 使用`# 引言`作为开头
         """
 
-
         logging.info("📝 正在生成研究计划书引言部分...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 4,
-                                                 self.llm.stream([HumanMessage(content=introduction_prompt)]))
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(introduction_prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成引言"
+        )
         # 只保存引言正文，不包含参考文献
         state["introduction"] = full_content
         logging.info("✅ 引言部分生成完成")
 
-
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def write_literature_review_node(self, state: ProposalState) -> ProposalState:
@@ -659,8 +778,10 @@ class ProposalAgent:
         introduction_content = state.get("introduction", "")
 
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state, step=5)
+        literature_summary = self.get_literature_summary_with_refs(state)
 
+        state["global_step_num"] += 1
+        start_time = time.time()
         # 生成引用指导
         citation_instruction = """
         **引用要求：**
@@ -718,15 +839,19 @@ class ProposalAgent:
         10. 使用承接性语言连接引言部分的内容
         """
 
-
         logging.info("📚 正在生成研究计划书文献综述部分...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 5,
-                                                 self.llm.stream([HumanMessage(content=literature_review_prompt)]))
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(literature_review_prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成综述"
+        )
         # 注意：文献综述不重复添加参考文献部分，因为引言已经包含了完整的参考文献列表
         state["literature_review"] = full_content
         logging.info("✅ 文献综述部分生成完成")
 
-
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def write_research_design_node(self, state: ProposalState) -> ProposalState:
@@ -737,8 +862,10 @@ class ProposalAgent:
         literature_review_content = state.get("literature_review", "")
 
         # 使用统一的文献摘要
-        literature_summary = self.get_literature_summary_with_refs(state, step=6)
+        literature_summary = self.get_literature_summary_with_refs(state)
 
+        state["global_step_num"] += 1
+        start_time = time.time()
         # 生成引用指导
         citation_instruction = """
         **引用要求：**
@@ -789,19 +916,25 @@ class ProposalAgent:
         **不要包含时间安排或预期成果总结，这些将在结论部分统一阐述。**
         """
 
-
         logging.info("🔬 正在生成研究计划书研究设计部分...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 6,
-                                                 self.llm.stream([HumanMessage(content=research_design_prompt)]))
-
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(research_design_prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成研究"
+        )
         state["research_design"] = full_content
         logging.info("✅ 研究设计部分生成完成")
 
-
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def write_conclusion_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的结论部分"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         research_field = state["research_field"]
         introduction_content = state.get("introduction", "")
         literature_review_content = state.get("literature_review", "")
@@ -828,16 +961,22 @@ class ProposalAgent:
         """
 
         logging.info("📜 正在生成研究计划书结论部分...")
-        full_content = stream_mes_2_full_content(state["proposal_id"], 7,
-                                                 self.llm.stream([HumanMessage(content=conclusion_prompt_text)]))
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([HumanMessage(conclusion_prompt_text)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成结论"
+        )
         state["conclusion"] = full_content
         logging.info("✅ 结论部分生成完成")
 
-
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def generate_final_references_node(self, state: ProposalState) -> ProposalState:
         """生成最终的参考文献部分"""
+
         reference_section = self.generate_reference_section(state)
 
         # 将参考文献作为独立部分保存
@@ -848,8 +987,6 @@ class ProposalAgent:
 
     def generate_final_report_node(self, state: ProposalState) -> ProposalState:
         """生成最终的Markdown研究计划书报告"""
-        start_timestamp = time.time()
-        QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "正在生成最终研究计划报告~"))
         logging.info("📄 正在生成最终的研究计划书Markdown报告...")
 
         research_field = state.get("research_field", "未知领域")
@@ -863,7 +1000,8 @@ class ProposalAgent:
         execution_memory = state.get("execution_memory", [])
 
         # 创建output文件夹
-        output_dir = "./output"
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(current_dir, '..', '..', 'output')
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
@@ -914,20 +1052,52 @@ class ProposalAgent:
             report_content += "无执行记录。\n\n"
 
         report_content += "### A.3 收集的文献与信息摘要\n\n"
-        report_content += self.get_literature_summary_with_refs(state, 9) + "\n\n"
+        report_content += self.get_literature_summary_with_refs(state) + "\n\n"
 
+        state["global_step_num"] += 1
+        start_time = time.time()
+
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成最终报告",
+            content="\n正在生成最终研究计划报告~",
+        ))
         try:
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 f.write(report_content)
             logging.info(f"✅ 最终报告已保存到: {report_filepath}")
             state["final_report_markdown"] = report_content
-            QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "\n✅ 报告生成完毕"))
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成结论",
+                content=f"\n✅ 处理完成，共耗时 {time.time() - start_time:.2f}s",
+            ))
             # 结束标记
-            QueueUtil.push_mes(StreamMes(state['proposal_id'], 0, ""))
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成最终报告",
+                content="",
+                is_finish=True
+            ))
         except Exception as e:
             logging.error(f"❌ 保存最终报告失败: {e}")
             state["final_report_markdown"] = "报告生成失败"
-            QueueUtil.push_mes(StreamMes(state['proposal_id'], 9, "\n❌  报告生成失败"))
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成结论",
+                content=f"\n❌ 处理失败，共耗时 {time.time() - start_time:.2f}s",
+            ))
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成最终报告",
+                content="",
+                is_finish=True
+            ))
 
         return state
 
@@ -1011,16 +1181,16 @@ class ProposalAgent:
         # 2. 设置图的入口点
         workflow.set_entry_point("clarify_focus")
 
-        # 3. 定义图的边（流程）
-        workflow.add_conditional_edges(
-            "clarify_focus",
-            self._decide_after_clarification,
-            {
-                "end_for_user_input": END,
-                "proceed_to_master_plan": "create_master_plan"
-            }
-        )
-
+        # # 3. 定义图的边（流程）
+        # workflow.add_conditional_edges(
+        #     "clarify_focus",
+        #     self._decide_after_clarification,
+        #     {
+        #         "end_for_user_input": END,
+        #         "proceed_to_master_plan": "create_master_plan"
+        #     }
+        # )
+        workflow.add_edge("clarify_focus", "create_master_plan")
         workflow.add_edge("create_master_plan", "plan_analysis")
 
         # 生成计划后，直接进入执行
@@ -1057,20 +1227,20 @@ class ProposalAgent:
         # 4. 编译图
         return workflow.compile(checkpointer=MemorySaver())
 
-
-    def generate_proposal(self, research_field: str, proposal_id: str,user_clarifications: str = "", revision_guidance: str = "") -> Dict[str, Any]:
+    def generate_proposal(self, research_field: str, proposal_id: str, user_clarifications: str = "",
+                          revision_guidance: str = "") -> Dict[str, Any]:
         """生成研究计划书"""
-        if not proposal_id:
-            proposal_id = f"proposal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # if not proposal_id:
+        #     proposal_id = f"proposal_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         config = {"configurable": {"thread_id": proposal_id}}
 
         initial_state = {
             "research_field": research_field,
-            "user_clarifications": user_clarifications, # 新增：接收用户澄清
+            "user_clarifications": user_clarifications,  # 新增：接收用户澄清
             "revision_guidance": revision_guidance,
             "proposal_id": proposal_id,  # 新增：唯一标识符
-            "clarification_questions": [], # 新增：初始化澄清问题列表
+            "clarification_questions": [],  # 新增：初始化澄清问题列表
             "query": "",
             "arxiv_papers": [],
             "web_search_results": [],
@@ -1093,22 +1263,21 @@ class ProposalAgent:
             "timeline_plan": "",
             "expected_results": "",
             "reference_list": [],  # 初始化统一参考文献列表
-            "ref_counter": 1,      # 初始化参考文献计数器
+            "ref_counter": 1,  # 初始化参考文献计数器
             "final_references": "",
             "conclusion": "",
-            "final_report_markdown": "" # 初始化最终报告字段
+            "final_report_markdown": "",  # 初始化最终报告字段
+            "global_step_num": 0  # 新增：当前步骤编号
         }
-        
+
         logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
-        
-        
-        QueueUtil.new_queue(proposal_id)  # 创建消息队列
-        result = self.workflow.invoke(initial_state,config=config)
+
+        result = self.workflow.invoke(initial_state, config=config)
         clarification_questions = result.get("clarification_questions", [])
         if clarification_questions:
             logging.info(" agent生成澄清问题，等待用户输入")
             return {"clarification_questions": clarification_questions}
-        
+
         return result
 
     def summarize_history_node(self, state: ProposalState) -> ProposalState:
@@ -1116,6 +1285,9 @@ class ProposalAgent:
         回顾执行历史并生成摘要。
         采用增量式摘要策略：基于旧的摘要和最新的一步来生成新摘要。
         """
+        state["global_step_num"] += 1
+        start_time = time.time()
+
         logging.info("🧠 开始生成增量式执行历史摘要...")
 
         execution_memory = state.get("execution_memory", [])
@@ -1176,12 +1348,18 @@ class ProposalAgent:
                 latest_step=latest_step_text
             )
 
-        response = self.llm.invoke([SystemMessage(content=prompt)])
-        summary = response.content.strip()
+        full_content = StreamUtil.transfer_stream_answer_mes(
+            stream_res=self.llm.stream([SystemMessage(content=prompt)]),
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="回顾历史并生成摘要"
+        )
 
-        state["history_summary"] = summary
-        logging.info(f"✅ 生成摘要完成: {summary}")
+        state["history_summary"] = full_content
+        logging.info(f"✅ 生成摘要完成: {full_content}")
 
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return state
 
     def save_to_long_term_memory_node(self, state: ProposalState) -> ProposalState:
@@ -1217,7 +1395,7 @@ class ProposalAgent:
 
         return state
 
-    def rerank_with_llm(self, research_field : str, reference_list : List[Dict], top_n=10) -> List[Dict] :
+    def rerank_with_llm(self, state: ProposalState, top_n=10) -> List[Dict]:
         """
         使用大型语言模型（LLM）对搜索结果进行重排序。
 
@@ -1229,11 +1407,16 @@ class ProposalAgent:
         返回:
             List[Dict]: 重排序后的结果
         """
-        if(len(reference_list) < 10):
+        state["global_step_num"] += 1
+        start_time = time.time()
+
+        research_field = state.get("research_field")
+        reference_list = state.get("reference_list")
+        if len(reference_list) < 10:
             logging.info(f"参考文件少于十条不进行重排序...")
             return reference_list
 
-        global response
+        full_content = ""
         logging.info(f"重排序 {len(reference_list)} 个文件...")
 
         scored_results = []  # 初始化一个空列表来存储评分后的结果
@@ -1265,10 +1448,14 @@ class ProposalAgent:
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=user_prompt)
                 ]
+                full_content = StreamUtil.transfer_stream_answer_mes(
+                    stream_res=self.llm.stream(messages),
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="参考论文重排序"
+                )
 
-                response = self.llm.invoke(messages)
-
-            if(reference["type"] == "Web"):
+            if (reference["type"] == "Web"):
                 # 定义用户提示给LLM
                 user_prompt = f"""Query: {research_field}
                         Document: {reference['content_preview']}
@@ -1279,10 +1466,15 @@ class ProposalAgent:
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=user_prompt)
                 ]
-                response = self.llm.invoke(messages)
+                full_content = StreamUtil.transfer_stream_answer_mes(
+                    stream_res=self.llm.stream(messages),
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="参考网络资源重排序"
+                )
                 # 提取评分
             try:
-                score = int(response.content.strip())
+                score = int(full_content)
             except Exception as e:
                 logging.error(f"文件排序错误 {i}: {e}")
                 score = 0  # 默认评分 0
@@ -1313,4 +1505,7 @@ class ProposalAgent:
                 filter_reference_list.append(ref)
                 web_ref_id += 1
         logging.info(f"采用相关性最高的十个文件")
+
+        QueueUtil.push_mes(StreamAnswerMes(state["proposal_id"], state["global_step_num"], "",
+                                           "\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)))
         return filter_reference_list

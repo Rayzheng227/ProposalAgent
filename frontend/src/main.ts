@@ -12,9 +12,6 @@ import Ws from "@/request/Ws";
 // 引入样式
 import "element-plus/dist/index.css";
 import "@/assets/styles/base.scss";
-import "@/assets/styles/theme.scss";
-import "element-plus/dist/index.css";
-import "element-plus/theme-chalk/dark/css-vars.css";
 // 实例化组件
 const app = createApp(App);
 const pinia = createPinia();

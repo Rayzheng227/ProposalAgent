@@ -25,6 +25,7 @@ class ProposalState(TypedDict):
     user_clarifications: str  # 用户提供的澄清信息
 
     # 计划和执行
+    global_step_num: int  # 新增：当前步骤编号
     research_plan: str # LLM生成的总体研究计划
     available_tools: List[Dict] # 可用工具的描述
     execution_plan: List[Dict] # LLM生成的具体执行步骤

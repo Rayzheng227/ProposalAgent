@@ -1,28 +1,20 @@
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
-from .config import GCF, load_config
-from .threadPool import get_executor
 from backend.src.services.agent_service import agent_service
 from backend.src.entity.r import R
 from backend.src.utils.queue_util import QueueUtil
 from backend.src.entity.stream_mes import StreamMes
 import asyncio
 
-# 加载配置
-load_config()
-
 # 创建 FastAPI 实例
 app = FastAPI()
-# backend/src/main.py
-
 # 允许所有来源的跨域设置
 app.add_middleware(
     CORSMiddleware,
@@ -32,12 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.get("/")
-@app.get("/index")
-def read_root():
-    return R.ok_with_mes("Welcome To Proposal-Agent!")
-
+thread_pool = ThreadPoolExecutor(max_workers=5)
 
 @app.post("/sendQuery")
 async def send_query(data: dict):
@@ -46,6 +33,7 @@ async def send_query(data: dict):
     data:{
         query: str # 问题
         historyId: str # 前端需要的唯一标记一个历史记录的id
+        isClarification: bool # 是否是回答问题
     }
     """
     if not data.get("query"):
@@ -53,10 +41,13 @@ async def send_query(data: dict):
     if not data.get("historyId"):
         return R.error_with_mes("历史记录异常")
 
-    def agent_task():
-        agent_service(data["query"], data["historyId"])
+    if data["isClarification"]:
+        QueueUtil.set_clarification(data["historyId"], data["query"])
+    else:
+        def agent_task():
+            agent_service(data["historyId"], data["query"])
+        thread_pool.submit(agent_task)
 
-    get_executor().submit(agent_task)
     return R.ok()
 
 
@@ -75,7 +66,7 @@ async def stream_mes(websocket: WebSocket, history_id: str):
                 continue
             # 发送正常消息
             await websocket.send_text(json.dumps(mes.to_dict()))
-            if mes.step == 0: break
+            if mes.is_finish: break
 
     except WebSocketDisconnect:
         print(f"连接断开: {history_id}")
@@ -100,19 +91,12 @@ async def download(data: dict):
         return None
     file_type = data["fileType"]
 
-    # 获取当前文件的绝对路径
-    current_file_path = Path(__file__).resolve()
-    # 获取项目的根目录路径
-    project_root = current_file_path.parents[0]
     file_name = f"Research_Proposal_{data['historyId']}.{'pdf' if file_type == 'pdf' else 'md'}"
     # 构建输出文件夹的绝对路径
-    output_dir = project_root / 'output'
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(current_dir, '..', '..', 'output')
     # 获取具体文件路径
-    file_path = output_dir / file_name
+    file_path = os.path.join(output_dir, file_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path=file_path, filename=file_name)
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host=GCF.server.ip, port=GCF.server.port)

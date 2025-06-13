@@ -1,4 +1,4 @@
-# 忽略 Papers 文件夹中的所有内容
+# 忽略 papers 文件夹中的所有内容
 Papers/*
 output/*
 __pycache__

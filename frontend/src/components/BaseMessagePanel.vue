@@ -11,10 +11,10 @@
 
 <script lang="ts" setup>
 import { ElMessage } from 'element-plus'
-import type { UserMessage } from '@/common/interfaces'
+import type { BaseMessage } from '@/common/interfaces'
 
 const props = defineProps<{
-  message: UserMessage
+  message: BaseMessage
 }>()
 
 const emit = defineEmits(['regenerate'])
@@ -46,6 +46,7 @@ const regenerateMessage = () => {
   align-items: flex-end;
   margin: 10px 0;
   width: 100%;
+  backdrop-filter: blur(4px);
 
   .message-content-wrapper {
     display: flex;

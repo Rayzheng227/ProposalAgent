@@ -50,7 +50,8 @@ def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool =
                 sort_by=arxiv.SortCriterion.SubmittedDate
             )
 
-            papers_dir = "./Papers"
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            papers_dir = os.path.join(current_dir, '..', '..', 'papers')
             if not os.path.exists(papers_dir):
                 os.makedirs(papers_dir)
 

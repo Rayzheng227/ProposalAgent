@@ -328,7 +328,7 @@ class ProposalExporter:
             '研究计划书': 'Research Proposal',
             '研究主题': 'Research Topic',
             '生成时间': 'Generated Time',
-            '收集论文': 'Collected Papers', 
+            '收集论文': 'Collected papers',
             '网络资源': 'Web Resources',
             '执行步骤': 'Execution Steps',
             '目录': 'Table of Contents',
@@ -354,9 +354,9 @@ class ProposalExporter:
             '文献类型': 'Literature Type',
             '数量': 'Count',
             '说明': 'Description',
-            '学术论文': 'Academic Papers',
+            '学术论文': 'Academic papers',
             '最新资讯': 'Latest Information',
-            '收集到的ArXiv论文': 'Collected ArXiv Papers',
+            '收集到的ArXiv论文': 'Collected ArXiv papers',
             '作者': 'Authors',
             '发表时间': 'Published Date',
             '人工智能': 'Artificial Intelligence',
@@ -730,7 +730,7 @@ class ProposalExporter:
             
             stats_text = f"""
             Execution Steps: {len(result.get('execution_memory', []))}<br/>
-            ArXiv Papers: {len(result.get('arxiv_papers', []))}<br/>
+            ArXiv papers: {len(result.get('arxiv_papers', []))}<br/>
             Web Results: {len(result.get('web_search_results', []))}
             """
             story.append(Paragraph(stats_text, styles['Normal']))

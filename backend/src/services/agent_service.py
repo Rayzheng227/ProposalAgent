@@ -1,11 +1,11 @@
 from backend.src.agent.graph import ProposalAgent
 import os
 
-def agent_service(research_question: str, proposal_id : str):
-    # 测试PDF摘要功能
-    # pdf_result = summarize_pdf.invoke({"path": "./Papers/test.pdf"})
-    # print("PDF摘要测试:", pdf_result)
 
+def agent_service(proposal_id: str, research_question: str):
+    # 测试PDF摘要功能
+    # pdf_result = summarize_pdf.invoke({"path": "./papers/test.pdf"})
+    # print("PDF摘要测试:", pdf_result)
     agent = ProposalAgent()
     result = agent.generate_proposal(research_question, proposal_id)
     print("\n" + "=" * 60)
@@ -38,7 +38,8 @@ def agent_service(research_question: str, proposal_id : str):
     # 输出最终报告的保存路径或内容
     if result.get("final_report_markdown") and result["final_report_markdown"] != "报告生成失败":
         # 查找报告文件名，因为路径是在函数内部生成的
-        output_dir = "./output"
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(current_dir, '..', '..', 'output')
         if os.path.exists(output_dir):
             files = sorted(os.listdir(output_dir), key=lambda x: os.path.getmtime(os.path.join(output_dir, x)),
                            reverse=True)
