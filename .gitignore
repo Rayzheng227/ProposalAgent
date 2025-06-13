@@ -9,9 +9,12 @@ __pycache__
 uv.lock
 # 忽略 pdf_output 文件夹中的所有内容
 exporter/pdf_output/*
-# 但保留 figures 文件夹及其内容
+# 但保留 figures 文件夹、Logo.png 及 mermaid_images 文件夹本身（不保留内容）
 !exporter/pdf_output/figures/
-!exporter/pdf_output/figures/**
+!exporter/pdf_output/figures/Logo.png
+!exporter/pdf_output/figures/mermaid_images/
+# 不保留 mermaid_images 下的内容
+exporter/pdf_output/figures/mermaid_images/*
 
 # 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep

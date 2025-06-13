@@ -4,13 +4,27 @@ import glob
 import subprocess
 from datetime import datetime
 from typing import Dict, List
+import json
+import shutil
+import logging
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-import json # Added for JSON parsing
+import time
 
 load_dotenv()
 Api_key = os.getenv('DASHSCOPE_API_KEY')
 base_url = os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 输出到控制台
+    ],
+    force=True # 强制覆盖任何已存在的配置
+)
+
 
 class ProposalExporter:
     def __init__(self, api_key: str = None, base_url: str = None):
@@ -20,10 +34,19 @@ class ProposalExporter:
         :param base_url: API基础URL
         """
         # 使用千问大模型配置，与graph.py保持一致
+        # Prioritize passed api_key, then environment variable, then None
+        effective_api_key = api_key if api_key is not None else os.getenv('DASHSCOPE_API_KEY')
+        effective_base_url = base_url if base_url is not None else os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+
+        if not effective_api_key:
+            logging.error("API key is not set. Please provide it as a parameter or set DASHSCOPE_API_KEY environment variable.")
+            # Decide how to handle this: raise error, or allow LLM to be None and handle downstream
+            # For now, let's allow it to proceed, ChatOpenAI will raise error if key is truly needed and missing
+
         self.llm = ChatOpenAI(
-            api_key=Api_key,
+            api_key=effective_api_key,
             model="qwen-turbo-latest", 
-            base_url=base_url or os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
+            base_url=effective_base_url,
             temperature=0,
             # max_tokens=4000  # 限制输出长度，避免超出模型限制
         )
@@ -33,7 +56,35 @@ class ProposalExporter:
         self.output_dir = "exporter/pdf_output"       # TeX/PDF的输出目录
         self.exporter_dir = "exporter"       # exporter目录路径 (包含cls, main.tex, figures)
         self.references_data: List[Dict] = None # Added to store parsed references
+
+        # Directories for Mermaid processing
+        self.final_mermaid_images_dir = os.path.join(self.output_dir, "figures", "mermaid_images")
+        self.temp_mermaid_files_dir = os.path.join(self.output_dir, "temp_mermaid") # Temp files in pdf_output
+        # Ensure these directories exist
+        os.makedirs(self.output_dir, exist_ok=True) # pdf_output
+        os.makedirs(self.final_mermaid_images_dir, exist_ok=True) # exporter/pdf_output/figures/mermaid_images
+        os.makedirs(self.temp_mermaid_files_dir, exist_ok=True) # exporter/pdf_output/temp_mermaid
         
+    def _escape_latex(self, text: str) -> str:
+        """Escapes special LaTeX characters in a string."""
+        if not text: return ""
+        conv = {
+            '&': r'\&',
+            '%': r'\%',
+            '$': r'\$',
+            '#': r'\#',
+            '_': r'\_',
+            '{': r'\{',
+            '}': r'\}',
+            '~': r'\textasciitilde{}',
+            '^': r'\textasciicircum{}',
+            '\\': r'\textbackslash{}',
+            '<': r'\textless{}',
+            '>': r'\textgreater{}',
+        }
+        regex = re.compile('|'.join(re.escape(str(key)) for key in sorted(conv.keys(), key = lambda item: - len(item))))
+        return regex.sub(lambda match: conv[match.group()], text)
+
     def read_template(self) -> str:
         """读取LaTeX模板文件"""
         with open(self.template_path, 'r', encoding='utf-8') as f:
@@ -169,7 +220,7 @@ class ProposalExporter:
 
         # 使用 \chapter* 以匹配文档其他主要部分的层级
         # latex_bib += "\\chapter*{参考文献}\n"
-        # 手动将“参考文献”添加到目录中
+        # 手动将"参考文献"添加到目录中
         # 第一个参数 'toc' 指的是目录文件
         # 第二个参数 'chapter' 指的是条目的层级（与\chapter一致）
         # 第三个参数 '参考文献' 是显示在目录中的文本
@@ -393,67 +444,69 @@ class ProposalExporter:
     def convert_md_to_latex(self, markdown_content: str, section_type: str) -> str:
         """
         使用大模型将Markdown内容转换为LaTeX格式
+        :param markdown_content: Markdown格式的内容
+        :param section_type: 章节类型（如"引言"、"文献综述"等）
+        :return: 转换后的LaTeX内容
         """
         # 截断内容以避免超出模型限制
         truncated_content = self.truncate_content(markdown_content, 60000)
         
         prompt = f"""
-请将以下Markdown内容转换为LaTeX格式，用于学术论文的{section_type}部分：
+请将以下Markdown内容转换为LaTeX格式，用于学术论文的{section_type}部分。要求：
 
-要求：
-1. 将## 标题转换为 \\section{{}}
-2. 将### 标题转换为 \\subsection{{}}
-3. 将#### 标题转换为 \\subsubsection{{}}
-4. 保持段落格式，确保中文排版正确
-5. 将引用格式[数字]保持为[数字]格式
-6. 将加粗文本转换为\\textbf{{}}
-7. 将斜体文本转换为\\textit{{}}
-8. 删除Markdown语法标记，只保留纯文本和LaTeX命令
-9. 最多返回2000字的内容
-10. **重要：直接返回LaTeX内容，不要使用```latex```或其他代码块标记包裹**
-11. **重要：避免重复的章节编号，如果内容中已有编号，请移除或调整**
-12. **重要：移除所有中文编号如（一）、（二）、（三）等，只保留纯标题文字**
+1. 内容只能填入[]占位符中
+2. 严格保持原文内容不变，只转换格式标记
+3. 格式转换规则：
+   - 将 **文本** 转换为 \\textbf{{文本}}
+   - 将 *文本* 转换为 \\textit{{文本}}
+   - 将 ## 标题 转换为 \\subsection{{标题}}
+   - 将 ### 标题 转换为 \\subsubsection{{标题}}
+   - 将 #### 标题 转换为 \\paragraph{{标题}}
+   - 保持引用格式 [数字] 不变
+   - 保持图片相关的LaTeX代码（如\\begin{{figure}}...\\end{{figure}}）不变
+4. 段落格式：
+   - 每个段落之间保留一个空行
+   - 确保中文排版正确
+5. 其他要求：
+   - 不要生成任何 \\chapter、\\section 等命令
+   - 不要修改原文中的任何文字内容
+   - 不要添加任何额外的内容
+   - 最多返回2000字的内容
+   - 直接返回LaTeX内容，不要使用```latex```或其他代码块标记包裹
 
 Markdown内容：
 {truncated_content}
 
-请只返回转换后的纯LaTeX内容，不要包含任何代码块标记，不要包含中文编号：
+请只返回转换后的纯LaTeX内容，不要包含任何代码块标记，不要包含任何章节标题：
 """
         
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
             
             response = self.llm.invoke([
-                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请直接返回LaTeX代码，不要使用任何markdown代码块标记包裹，同时移除所有中文编号。"),
+                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请严格按照要求转换格式，保持原文内容不变。对于图片相关的LaTeX代码，请保持原样。"),
                 HumanMessage(content=prompt)
             ])
             
             latex_content = response.content.strip()
             
-            # 更健壮地移除代码块标记，处理LLM可能在代码块前后添加额外文本的情况
-            extracted_payload = latex_content # 默认使用全部内容
-
-            # 尝试从 ```latex ... ``` 中提取
-            match_latex = re.search(r'```latex\s*(.*?)\s*```', latex_content, re.DOTALL | re.IGNORECASE)
-            if match_latex:
-                extracted_payload = match_latex.group(1).strip()
-            else:
-                # 如果没有 ```latex，尝试从 ``` ... ``` 中提取
-                match_generic = re.search(r'```\s*(.*?)\s*```', latex_content, re.DOTALL)
-                if match_generic:
-                    extracted_payload = match_generic.group(1).strip()
-            # 如果没有找到任何代码块标记, extracted_payload 保持为原始的 latex_content
-
-            # 清理提取出（或原始）的 payload
-            # clean_duplicate_numbering 会处理数字编号、中文编号以及残留的Markdown标题
-            cleaned_payload = self.clean_duplicate_numbering(extracted_payload)
+            # 清理提取出的内容
+            # 1. 移除所有章节标题命令
+            latex_content = re.sub(r'\\chapter\{.*?\}', '', latex_content)
+            latex_content = re.sub(r'\\section\{.*?\}', '', latex_content)
             
-            return cleaned_payload.strip()
+            # 2. 移除所有Markdown标题标记
+            latex_content = re.sub(r'^\s*#+\s*.*$', '', latex_content, flags=re.MULTILINE)
+            
+            # 3. 确保段落之间有适当的空行
+            latex_content = re.sub(r'\n{3,}', '\n\n', latex_content)
+            
+            return latex_content.strip()
         except Exception as e:
             print(f"转换失败: {e}")
-            # Fallback也应该清理
-            simple_latex = self.simple_md_to_latex(markdown_content)
-            return self.clean_duplicate_numbering(simple_latex).strip()
+            # 如果转换失败，返回一个基本的LaTeX表示
+            escaped_markdown = self._escape_latex(markdown_content)
+            return f"% ---- Fallback for section: {section_type} ----\n{escaped_markdown}\n% ---- End fallback ----"
 
     def extract_section_content(self, content: str, section_name: str) -> str:
         """提取特定章节的内容"""
@@ -476,6 +529,12 @@ Markdown内容：
 特别注意：当提取"研究内容"部分时，请确保内容主要对应研究方法、研究设计、数据来源、分析工具等具体的研究实施方案。
 请重点查找标题为"研究设计"、"研究方法"、"数据和来源"、"方法和分析"、"活动和工作流程"等章节的内容。
 不要包含引言、文献综述等前文内容，只提取与具体研究实施相关的部分。
+"""
+        elif section_name == "引言":
+            prompt_text += """
+特别注意：当提取"引言"部分时，请确保只提取 Markdown 文件中以 `# 引言` (或类似的一级标题，如 `# Introduction`) 开头的章节内容。
+你需要完整地提取该章节下的所有文本，直到遇到下一个一级或二级标题为止。
+不要包含摘要、目录、文献综述或研究计划的其他部分。
 """
         
         prompt_text += f"""
@@ -632,18 +691,216 @@ Markdown内容：
             
         return content_map
     
-    def fill_template(self, template: str, content_map: Dict[str, str]) -> str:
-        """将提取的内容填入模板"""
+    def _process_all_mermaid_diagrams(self, markdown_content: str, report_filename_base: str) -> str:
+        """
+        处理所有Mermaid图表：
+        1. 提取Mermaid代码块
+        2. 将每个Mermaid代码块保存为单独的md文件
+        3. 使用mmdc工具将md文件转换为图片
+        4. 在LaTeX中插入生成的图片
+        """
+        logging.info("开始处理所有Mermaid图表...")
+        
+        processed_content = markdown_content
+        # 改进Mermaid代码块匹配模式，使其更严格
+        mermaid_matches = list(re.finditer(r"```mermaid\s*([\s\S]+?)```", markdown_content))
+        
+        if not mermaid_matches:
+            logging.info("未找到Mermaid图表。")
+            return markdown_content
+
+        num_diagrams = len(mermaid_matches)
+        logging.info(f"找到 {num_diagrams} 个Mermaid图表需要处理。")
+
+        for idx, match in enumerate(mermaid_matches):
+            original_mermaid_block = match.group(0)
+            mermaid_code = match.group(1).strip()
+            
+            # 为每个图表创建唯一的标识符
+            image_file_stem = f"{report_filename_base}_mermaid_{idx}"
+            temp_md_filename = f"{image_file_stem}.md"
+            output_png_filename = f"{image_file_stem}.png"
+
+            # 创建临时md文件路径和最终图片路径
+            temp_md_filepath = os.path.join(self.temp_mermaid_files_dir, temp_md_filename)
+            output_png_filepath = os.path.join(self.final_mermaid_images_dir, output_png_filename)
+
+            logging.info(f"处理Mermaid图表 {idx + 1}/{num_diagrams}: {image_file_stem}")
+
+            try:
+                # 将Mermaid代码保存为单独的md文件
+                with open(temp_md_filepath, "w", encoding="utf-8") as mf:
+                    mf.write("```mermaid\n")
+                    mf.write(mermaid_code)
+                    mf.write("\n```")
+                logging.debug(f"已创建临时Mermaid md文件: {temp_md_filepath}")
+
+                # 先将临时md文件复制到图片目录
+                target_md_in_img_dir = os.path.join(self.final_mermaid_images_dir, temp_md_filename)
+                shutil.copy(temp_md_filepath, target_md_in_img_dir)
+
+                # 使用mmdc工具将md文件转换为图片（只用文件名，cwd为图片目录）
+                mmdc_command = [
+                    "mmdc",
+                    "-i", temp_md_filename,  # 只用文件名
+                    "-o", output_png_filename,  # 只用文件名
+                    "-w", "1024",
+                    "-H", "768",
+                    "--backgroundColor", "white"
+                ]
+                logging.debug(f"执行mmdc命令: {' '.join(mmdc_command)}，工作目录: {self.final_mermaid_images_dir}")
+                process = subprocess.run(
+                    mmdc_command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                    cwd=self.final_mermaid_images_dir  # 强制在目标目录下生成
+                )
+
+                # 清理复制到图片目录下的md文件
+                if os.path.exists(target_md_in_img_dir):
+                    try:
+                        os.remove(target_md_in_img_dir)
+                        logging.debug(f"已删除图片目录下的临时md文件: {target_md_in_img_dir}")
+                    except OSError as e_rm:
+                        logging.warning(f"无法删除图片目录下的临时md文件 {target_md_in_img_dir}: {e_rm}")
+
+                if process.returncode == 0:
+                    # 检查图片是否生成在预期位置（支持 -1 后缀）
+                    found_png = None
+                    for _ in range(5):  # 最多重试5次
+                        if os.path.exists(output_png_filepath):
+                            found_png = output_png_filepath
+                            break
+                        # 查找以 image_file_stem 开头的 png 文件（包括 -1 后缀）
+                        for fname in os.listdir(self.final_mermaid_images_dir):
+                            if fname.startswith(image_file_stem) and fname.endswith('.png'):
+                                found_png = os.path.join(self.final_mermaid_images_dir, fname)
+                                break
+                        if found_png:
+                            break
+                        time.sleep(0.2)  # 等待写盘
+                    if found_png:
+                        logging.info(f"✅ Mermaid PNG生成成功: {found_png}")
+                    else:
+                        # 输出目录下所有png文件名
+                        all_pngs = [f for f in os.listdir(self.final_mermaid_images_dir) if f.endswith('.png')]
+                        logging.error(f"⚠️ 无法找到生成的PNG文件: {output_png_filepath} 或 {image_file_stem}-1.png。当前目录下PNG文件: {all_pngs}")
+                    
+                    # 构建LaTeX中的图片路径（相对于main.tex）
+                    latex_image_path = os.path.join("figures", "mermaid_images", output_png_filename)
+                    latex_image_path = latex_image_path.replace("\\", "/")  # 确保使用正斜杠
+
+                    # 尝试从mermaid代码中提取标题作为图片说明
+                    caption_text = f"Mermaid图表 {idx + 1}"  # 默认说明
+                    title_match = re.search(r"^\s*title\s*:\s*(.+)$", mermaid_code, re.MULTILINE | re.IGNORECASE)
+                    if title_match:
+                        caption_text = self._escape_latex(title_match.group(1).strip())
+                    
+                    # 创建唯一的标签
+                    label_text = f"fig:{image_file_stem.replace('_', '-')}"
+
+                    # 生成LaTeX图片代码
+                    latex_code = (
+                        f"\n\n\\begin{{figure}}[htbp]\n"
+                        f"\\centering\n"
+                        f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
+                        f"\\caption{{{caption_text}}}\n"
+                        f"\\label{{{label_text}}}\n"
+                        f"\\end{{figure}}\n\n"
+                    )
+                    
+                    # 替换原始Mermaid代码块为LaTeX图片代码
+                    processed_content = processed_content.replace(original_mermaid_block, latex_code, 1)
+                    logging.debug(f"已将Mermaid代码块 {idx+1} 替换为LaTeX图片代码。")
+
+                else:
+                    logging.error(f"⚠️ 生成Mermaid PNG失败: {image_file_stem}")
+                    logging.error(f"MMDC返回码: {process.returncode}")
+                    logging.error(f"MMDC标准输出: {process.stdout}")
+                    logging.error(f"MMDC错误输出: {process.stderr}")
+                    error_message = self._escape_latex(f"生成Mermaid图表失败: {image_file_stem}。请检查日志。")
+                    processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
+
+            except FileNotFoundError as e:
+                logging.error(f"⚠️ 未找到MMDC命令或生成的文件: {e}")
+                error_message = self._escape_latex(f"未找到MMDC命令或生成的文件: {image_file_stem}。")
+                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
+            except subprocess.TimeoutExpired:
+                logging.error(f"⚠️ MMDC命令超时: {image_file_stem}")
+                error_message = self._escape_latex(f"生成Mermaid图表超时: {image_file_stem}。")
+                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
+            except Exception as e:
+                logging.error(f"⚠️ 处理Mermaid图表时发生异常 {image_file_stem}: {e}", exc_info=True)
+                error_message = self._escape_latex(f"处理Mermaid图表时发生异常: {image_file_stem} - {str(e)}")
+                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
+            finally:
+                # 清理临时md文件
+                if os.path.exists(temp_md_filepath):
+                    try:
+                        os.remove(temp_md_filepath)
+                        logging.debug(f"已删除临时md文件: {temp_md_filepath}")
+                    except OSError as e_rm:
+                        logging.warning(f"无法删除临时md文件 {temp_md_filepath}: {e_rm}")
+        
+        logging.info("已完成所有Mermaid图表的处理。")
+        return processed_content
+
+    def fill_template(self, template: str, content_map: Dict[str, str], md_content_for_mermaid: str, report_filename_base: str) -> str:
+        """
+        将提取的内容填入模板，并处理Mermaid图像
+        :param template: LaTeX模板内容
+        :param content_map: 包含各章节内容的字典
+        :param md_content_for_mermaid: 包含Mermaid图表的Markdown内容
+        :param report_filename_base: 报告文件名基础（用于生成图片文件名）
+        :return: 填充后的模板内容
+        """
         filled_template = template
         
-        # 替换占位符
+        # 替换标准占位符
         filled_template = filled_template.replace('[title]', content_map.get('title', '研究计划'))
-        filled_template = filled_template.replace('[time]', content_map.get('time', ''))
+        filled_template = filled_template.replace('[time]', content_map.get('time', datetime.now().strftime('%Y年%m月')))
         filled_template = filled_template.replace('[引言]', content_map.get('引言', ''))
         filled_template = filled_template.replace('[文献综述]', content_map.get('文献综述', ''))
         filled_template = filled_template.replace('[研究内容]', content_map.get('研究内容', ''))
         filled_template = filled_template.replace('[总结]', content_map.get('总结', ''))
-        filled_template = filled_template.replace('[参考文献内容]', content_map.get('参考文献内容', '')) # New
+        filled_template = filled_template.replace('[参考文献内容]', content_map.get('参考文献内容', ''))
+        
+        # 处理Mermaid图表，只插入第一个gantt类型的图片代码
+        processed_mermaid_content = self._process_all_mermaid_diagrams(md_content_for_mermaid, report_filename_base)
+        gantt_found = True
+        gantt_figure_code = ''
+        for match in re.finditer(r'```mermaid\s*([\s\S]+?)```', md_content_for_mermaid):
+            mermaid_code = match.group(1).strip()
+            if 'gantt' in mermaid_code.lower():
+                gantt_found = True
+                break
+
+        if gantt_found:
+            # 在图片目录下找第一个 _mermaid_ 且 .png 结尾的图片
+            for fname in sorted(os.listdir(os.path.join(self.output_dir, "figures", "mermaid_images"))):
+                logging.info(f'fname: {fname}')
+                if '_mermaid_' in fname and fname.endswith('.png'):
+                    latex_image_path = os.path.join("figures", "mermaid_images", fname).replace("\\", "/")
+                    caption_text = "Gantt 甘特图"
+                    label_text = f"fig:{fname.replace('.png','')}"
+                    gantt_figure_code = (
+                        f"\n\n\\begin{{figure}}[htbp]\n"
+                        f"\\centering\n"
+                        f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
+                        f"\\caption{{{caption_text}}}\n"
+                        f"\\label{{{label_text}}}\n"
+                        f"\\end{{figure}}\n\n"
+                    )
+                    logging.info(f'找到甘特图图片: {fname}')
+                    break
+        else:
+            logging.info('未找到 gantt 代码块')
+
+        filled_template = filled_template.replace('%MERMAID_IMAGE%', gantt_figure_code)
+        filled_template = filled_template.replace('[Mermaid Image]', gantt_figure_code)
+        logging.info(f"甘特图代码: {gantt_figure_code}")
         
         return filled_template
     
@@ -746,11 +1003,10 @@ Markdown内容：
                         shutil.rmtree(target_figures_dir)
                     print("✓ 已清理临时类文件和Logo文件")
                 except Exception as e:
-                    print(f"⚠️ 清理临时文件时出错: {e}")
-                    pass
+                    print(f"⚠️ 清理临时文件失败: {e}")
                 return True
             else:
-                print(f"❌ PDF文件未生成: {pdf_filename}")
+                print("❌ PDF文件未能生成")
                 return False
 
         except subprocess.TimeoutExpired:
@@ -766,7 +1022,7 @@ Markdown内容：
             return False
         finally:
             os.chdir(original_cwd)
-    
+
     def _cleanup_temp_files(self, tex_name_without_ext: str):
         """清理LaTeX编译产生的临时文件"""
         temp_extensions = ['.aux', '.log', '.out', '.toc', '.fdb_latexmk', '.fls', '.synctex.gz']
@@ -797,116 +1053,126 @@ Markdown内容：
             print("✓ 已读取模板文件")
         except Exception as e:
             print(f"❌ 读取模板文件失败: {e}")
-            return None
+            return None, None # Return two Nones for tex_file, pdf_file
         
         # 读取Markdown文件 (从 self.markdown_source_dir)
         md_files = self.read_markdown_files(specific_file)
-        if not md_files: # 检查是否成功读取到文件
+        if not md_files:
             print(f"警告: 未能从 '{self.markdown_source_dir}' 读取到Markdown文件。")
-            return None
+            return None, None
         print(f"✓ 已读取 {len(md_files)} 个Markdown文件")
         
-        # 提取和转换内容
+        # 合并所有Markdown内容，用于Mermaid提取和内容分析
+        full_md_content = "\n\n".join(md_files.values())
+        
         print("正在提取和转换内容...")
         try:
-            content_map = self.extract_content_by_type(md_files)
+            content_map = self.extract_content_by_type(md_files) # extract_content_by_type uses md_files dict
             print("✓ 内容提取和转换完成")
         except Exception as e:
             print(f"❌ 内容提取失败: {e}")
-            return None
+            return None, None
         
-        # 填入模板
-        filled_template = self.fill_template(template, content_map)
+        # 获取报告文件名基础，用于Mermaid图片命名
+        report_filename_base = os.path.splitext(os.path.basename(output_filename))[0]
+
+        # Process all Mermaid diagrams in the entire document before section splitting or LLM conversion
+        logging.info("Processing Mermaid diagrams globally before filling template...")
+        full_md_content = self._process_all_mermaid_diagrams(full_md_content, report_filename_base)
+        logging.info("Global Mermaid diagrams processed and replaced with LaTeX image tags.")
         
-        # 构建最终TeX文件的完整输出路径 (e.g., exporter/pdf_output/proposal_xxxx.tex)
-        output_tex_basename = os.path.basename(output_filename) # 确保只取文件名
+        # 填入模板，此时会处理Mermaid图表
+        filled_template = self.fill_template(template, content_map, full_md_content, report_filename_base)
+        
+        output_tex_basename = os.path.basename(output_filename)
         output_filepath = os.path.join(self.output_dir, output_tex_basename)
         
-        # 保存结果到 self.output_dir 目录
         try:
             with open(output_filepath, 'w', encoding='utf-8') as f:
                 f.write(filled_template)
             print(f"✓ 研究计划已导出到: {output_filepath}")
         except Exception as e:
             print(f"❌ 保存文件失败: {e}")
-            return None
+            return output_filepath, None # Return tex_file path even if PDF fails later
         
-        # 自动编译PDF
+        pdf_path = None
         if compile_pdf:
             print("\n开始编译PDF...")
-            # 传递TeX文件名 (basename) 和 TeX/PDF输出目录给编译函数
-            # tex_filename 应该是 output_tex_basename
             success = self.compile_with_xelatex(output_tex_basename, self.output_dir)
             if success:
                 pdf_name = os.path.splitext(output_tex_basename)[0] + ".pdf"
-                pdf_path = os.path.join(self.output_dir, pdf_name) # PDF也在output_dir中
+                pdf_path = os.path.join(self.output_dir, pdf_name)
                 print(f"✅ PDF文件已生成: {pdf_path}")
-                return output_filepath, pdf_path
             else:
                 print("⚠️ PDF编译失败，但LaTeX文件已成功生成")
-                print("您可以手动运行以下命令编译:")
-                print(f"cd {self.output_dir}")
-                print(f"xelatex {os.path.basename(output_filepath)}")
-                return output_filepath, None
+                print(f"您可以手动运行以下命令编译: cd {self.output_dir} && xelatex {output_tex_basename}")
+        
+        return output_filepath, pdf_path
 
-        return output_filepath, None
+# 全局的 convert_to_latex 函数不再需要，其逻辑已移入 ProposalExporter
+# def convert_to_latex(md_content, research_field, output_dir, report_filename_base):
+# ...
 
 def main():
     """主函数示例"""
-    # 创建导出器实例，使用千问大模型
     exporter = ProposalExporter()
     
-    # 检查是否有命令行参数指定文件
     import sys
-    specific_md_file = None # 重命名以更清晰
+    specific_md_file = None
     if len(sys.argv) > 1:
         specific_md_file = sys.argv[1]
-        # specific_md_file 应该是相对于 markdown_source_dir 的文件名或完整路径
-        # 如果是完整路径，read_markdown_files 会处理
-        # 如果只是文件名，read_markdown_files 会在 markdown_source_dir 中查找
         print(f"使用指定Markdown文件: {specific_md_file}")
     else:
         print(f"未指定文件，将自动从 '{exporter.markdown_source_dir}' 选择最新的Markdown文件")
     
-    # 生成带时间戳的输出TeX文件名 (将在 pdf_output 目录中创建)
-    from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_tex_filename = f"proposal_{timestamp}.tex" # 这是最终tex文件的名称
     
-    # 导出研究计划并编译PDF
-    # specific_file 参数传递给 export_proposal
-    result = exporter.export_proposal(output_tex_filename, compile_pdf=True, specific_file=specific_md_file)
+    # 尝试从文件名提取研究领域部分，如果失败则使用通用名称
+    # This part is tricky if specific_md_file is None or doesn't follow the pattern
+    research_field_for_filename = "proposal" 
+    temp_md_files = exporter.read_markdown_files(specific_md_file) # Read once to get filename if auto
+    if temp_md_files:
+        # Assuming temp_md_files has one entry if specific_file is None and a file is found
+        # Or if specific_file is provided and valid.
+        first_filename = list(temp_md_files.keys())[0]
+        match = re.search(r'Research_Proposal_([^_]+(?:_[^_]+)*)_proposal', first_filename)
+        if match:
+            research_field_for_filename = match.group(1)
+        else: # Fallback if pattern doesn't match
+            research_field_for_filename = os.path.splitext(first_filename)[0].replace("Research_Proposal_", "").replace("_proposal", "")[:30]
     
-    if result is None:
-        print("❌ 导出失败")
-        return
+    output_tex_filename = f"{research_field_for_filename}_{timestamp}.tex"
     
-    if isinstance(result, tuple):
-        tex_file, pdf_file = result
+    print(f"🔄 正在导出研究计划为 {output_tex_filename} 并编译PDF...")
+    # 调用 exporter.export_proposal，它现在内部处理Mermaid
+    tex_file_path, pdf_file_path = exporter.export_proposal(
+        output_filename=output_tex_filename,
+        compile_pdf=True,
+        specific_file=specific_md_file
+    )
+    
+    if tex_file_path:
         print(f"\n导出完成！")
-        print(f"LaTeX文件: {tex_file}")
-        if pdf_file:
-            print(f"PDF文件: {pdf_file}")
+        print(f"LaTeX文件: {tex_file_path}")
+        if pdf_file_path:
+            print(f"PDF文件: {pdf_file_path}")
             print("✅ 所有文件已成功生成！")
-            
-            # 尝试打开PDF文件
             try:
                 import platform
                 if platform.system() == "Linux":
-                    subprocess.run(['xdg-open', pdf_file], check=False)
-                elif platform.system() == "Darwin":  # macOS
-                    subprocess.run(['open', pdf_file], check=False)
+                    subprocess.run(['xdg-open', pdf_file_path], check=False)
+                elif platform.system() == "Darwin":
+                    subprocess.run(['open', pdf_file_path], check=False)
                 elif platform.system() == "Windows":
-                    subprocess.run(['start', pdf_file], shell=True, check=False)
-            except:
-                print(f"请手动打开PDF文件: {pdf_file}")
+                    subprocess.run(['start', pdf_file_path], shell=True, check=False)
+            except Exception as e:
+                print(f"无法自动打开PDF文件: {e}. 请手动打开: {pdf_file_path}")
         else:
-            print("⚠️ LaTeX文件已生成，但PDF编译失败")
-            print("请检查LaTeX环境配置")
+            print("⚠️ LaTeX文件已生成，但PDF编译失败。请检查LaTeX环境配置。")
     else:
-        print(f"\n导出完成！生成的文件: {result}")
+        print("❌ 导出失败。")
 
 if __name__ == "__main__":
-    # Api_key = os.getenv('DASHSCOPE_API_KEY')
-    # print(Api_key)
+    # 配置日志记录
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main()

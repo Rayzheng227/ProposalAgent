@@ -20,7 +20,7 @@ import logging
 from backend.src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
-from .tools import search_arxiv_papers_tool,  search_crossref_papers_tool,  search_web_content_tool,  summarize_pdf
+from .tools import search_arxiv_papers_tool,  search_crossref_papers_tool,  search_web_content_tool,  summarize_pdf, generate_gantt_chart_tool
 from .state import ProposalState
 from backend.src.utils.queue_util import QueueUtil
 from backend.src.utils.stream_mes_util import stream_mes_2_full_content
@@ -57,7 +57,7 @@ class ProposalAgent:
         # 设置Tavily API密钥
         # os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf]
+        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
 
@@ -618,7 +618,9 @@ class ProposalAgent:
         3. 例如：人工智能在医疗诊断中显示出巨大潜力[1]，特别是在影像识别领域[2]。
         4. 不要编造不存在的引用，只能引用上述提供的文献
         5. 如果某个观点来自多个文献，可以使用 [1,2] 的格式
+        6. 你所引用的内容必须真实来自文献列表
         """
+    
 
         # 使用prompts.py中的instruction
         introduction_prompt = f"""
@@ -632,6 +634,9 @@ class ProposalAgent:
         **已收集的文献和信息：**
         {literature_summary}
         {citation_instruction}
+        
+        **真实的文献列表**
+        {state["reference_list"]}
 
         请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的引言部分。
         
@@ -675,6 +680,7 @@ class ProposalAgent:
         5. 如果某个观点来自多个文献，可以使用 [1,2,3] 的格式
         6. 在论述不同观点或研究发现时，要明确标注来源
         7. 对于重要的理论框架或方法论，必须引用相关文献
+        8. 你所引用的内容必须真实来自文献列表
         """
 
         # 连贯性指导
@@ -706,6 +712,9 @@ class ProposalAgent:
         {citation_instruction}
         
         {coherence_instruction}
+        
+        **真实的文献列表**
+        {state["reference_list"]}
         
         请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的文献综述部分。
         
@@ -752,6 +761,7 @@ class ProposalAgent:
         4. 不要编造不存在的引用，只能引用已提供的文献
         5. 在描述方法论依据时要明确标注来源
         6. 对于重要的分析工具和技术框架，必须引用相关文献
+        7. 你所引用的内容必须真实来自文献列表
         """
 
         # 连贯性指导
@@ -787,6 +797,9 @@ class ProposalAgent:
         
         {coherence_instruction}
         
+        **真实的文献列表**
+        {state["reference_list"]}
+        
         请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的研究设计部分。
         重点关注研究数据、方法、工作流程和局限性。
         必须**使用中文撰写**
@@ -811,6 +824,19 @@ class ProposalAgent:
         literature_review_content = state.get("literature_review", "")
         research_design_content = state.get("research_design", "")
 
+        # 为结论部分也添加文献引用能力
+        literature_summary = self.get_literature_summary_with_refs(state, step=7)
+        
+        # 结论部分的引用指导
+        citation_instruction = """
+        **引用要求（结论部分）：**
+        1. 在总结研究意义或预期贡献时，可以适当引用相关文献来支撑观点
+        2. 引用标记对应文献列表中的编号，格式为 [编号]
+        3. 例如：本研究的预期成果将为该领域提供新的理论框架[1,3]，并有望在实际应用中产生重要影响[5]。
+        4. 不要编造不存在的引用，只能引用已提供的文献
+        5. 你所引用的内容必须真实来自文献列表
+        """
+
         conclusion_prompt_text = f"""
         {CONCLUSION_PROMPT.format(research_field=research_field)}
 
@@ -824,6 +850,14 @@ class ProposalAgent:
 
         **已完成的研究设计部分摘要（用于回顾方法和流程）：**
         {research_design_content[:1000]}...
+        
+        **已收集的文献和信息（用于可能的引用）：**
+        {literature_summary}
+        
+        {citation_instruction}
+        
+        **真实的文献列表**
+        {state["reference_list"]}
 
         请基于以上提供的引言、文献综述和研究设计内容，撰写一个连贯的结论部分。
         结论应包含时间轴、预期成果和最终总结。
@@ -836,7 +870,69 @@ class ProposalAgent:
                                                  self.llm.stream([HumanMessage(content=conclusion_prompt_text)]))
         state["conclusion"] = full_content
         logging.info("✅ 结论部分生成完成")
+        logging.info(f"结论内容长度: {len(full_content)} 字符")
 
+        # 生成甘特图
+        logging.info("📊 正在生成项目甘特图...")
+        logging.info(f"传入甘特图工具的研究领域: {research_field}")
+        logging.info(f"传入甘特图工具的结论内容长度: {len(full_content)} 字符")
+        
+        # 初始化甘特图字段，确保状态中存在
+        if "gantt_chart" not in state:
+            state["gantt_chart"] = ""
+            logging.info("🔧 初始化甘特图字段")
+        
+        try:
+            gantt_result = generate_gantt_chart_tool.invoke({
+                "timeline_content": full_content,
+                "research_field": research_field
+            })
+            
+            logging.info(f"甘特图工具返回状态: {gantt_result.get('status')}")
+            logging.info(f"甘特图工具返回消息: {gantt_result.get('message')}")
+            
+            if gantt_result.get("status") == "success":
+                gantt_chart_content = gantt_result.get("gantt_chart", "")
+                # 强制设置甘特图内容并验证
+                state["gantt_chart"] = gantt_chart_content
+                
+                # 立即验证设置是否成功
+                verification_content = state.get("gantt_chart", "")
+                logging.info(f"✅ 甘特图设置完成，验证长度: {len(verification_content)} 字符")
+                
+                if gantt_chart_content and len(gantt_chart_content) > 0:
+                    logging.info(f"甘特图内容预览: {gantt_chart_content[:200]}...")
+                    QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, "\n✅ 项目甘特图生成完成"))
+                else:
+                    logging.warning("⚠️ 甘特图生成成功但内容为空")
+                    QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, "\n⚠️ 甘特图生成成功但内容为空"))
+            else:
+                state["gantt_chart"] = ""
+                error_msg = gantt_result.get('message', '未知错误')
+                logging.warning(f"⚠️ 甘特图生成失败: {error_msg}")
+                QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, f"\n⚠️ 甘特图生成失败: {error_msg}"))
+                
+        except Exception as e:
+            state["gantt_chart"] = ""
+            logging.error(f"❌ 甘特图生成异常: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, f"\n❌ 甘特图生成异常: {str(e)}"))
+
+        # 最终验证并确保状态传递
+        final_gantt_chart = state.get("gantt_chart", "")
+        logging.info(f"结论节点结束时，state中的gantt_chart长度: {len(final_gantt_chart)} 字符")
+        
+        # 强制确保甘特图在状态中不会丢失
+        if final_gantt_chart and len(final_gantt_chart) > 0:
+            logging.info(f"state中的gantt_chart内容预览: {final_gantt_chart[:200]}...")
+            # 额外保护：将甘特图也存储在另一个字段作为备份
+            state["gantt_chart_backup"] = final_gantt_chart
+            logging.info("🔒 已创建甘特图备份")
+        else:
+            logging.warning("⚠️ state中的gantt_chart为空")
+            state["gantt_chart"] = ""
+            state["gantt_chart_backup"] = ""
 
         return state
 
@@ -847,6 +943,24 @@ class ProposalAgent:
         # 将参考文献作为独立部分保存
         state["final_references"] = reference_section
         logging.info("✅ 参考文献部分生成完成")
+
+        # 检查并恢复甘特图状态
+        gantt_chart = state.get("gantt_chart", "")
+        gantt_backup = state.get("gantt_chart_backup", "")
+        
+        logging.info(f"参考文献节点中的甘特图长度: {len(gantt_chart)} 字符")
+        logging.info(f"参考文献节点中的甘特图备份长度: {len(gantt_backup)} 字符")
+        
+        # 如果主甘特图丢失但备份存在，则恢复
+        if not gantt_chart and gantt_backup:
+            state["gantt_chart"] = gantt_backup
+            logging.warning("⚠️ 主甘特图丢失，已从备份恢复")
+            gantt_chart = gantt_backup
+        
+        if gantt_chart:
+            logging.info(f"参考文献节点中的甘特图预览: {gantt_chart[:200]}...")
+        else:
+            logging.warning("⚠️ 参考文献节点中甘特图为空")
 
         return state
 
@@ -862,10 +976,40 @@ class ProposalAgent:
         research_design = state.get("research_design", "无研究设计内容")
         conclusion = state.get("conclusion", "无结论内容")
         final_references = state.get("final_references", "无参考文献")
+        gantt_chart = state.get("gantt_chart", "")  # 获取甘特图
 
         research_plan = state.get("research_plan", "无初始研究计划")
         execution_memory = state.get("execution_memory", [])
         reference_list = state.get("reference_list", [])
+
+        # 检查并恢复甘特图 - 使用多重检查和恢复机制
+        gantt_chart = state.get("gantt_chart", "")
+        gantt_backup = state.get("gantt_chart_backup", "")
+        
+        # 增强调试信息
+        logging.info(f"生成最终报告时，获取到的gantt_chart长度: {len(gantt_chart)} 字符")
+        logging.info(f"生成最终报告时，获取到的gantt_chart_backup长度: {len(gantt_backup)} 字符")
+        logging.info(f"当前state中所有键: {list(state.keys())}")
+        
+        # 尝试从备份恢复甘特图
+        if not gantt_chart and gantt_backup:
+            gantt_chart = gantt_backup
+            state["gantt_chart"] = gantt_backup
+            logging.warning("⚠️ 最终报告生成时主甘特图为空，已从备份恢复")
+        
+        # 检查状态中是否真的存在甘特图
+        if "gantt_chart" in state:
+            actual_gantt = state["gantt_chart"]
+            logging.info(f"state['gantt_chart']的实际长度: {len(actual_gantt)} 字符")
+            if actual_gantt:
+                logging.info(f"实际甘特图内容前200字符: {actual_gantt[:200]}...")
+            else:
+                logging.warning("⚠️ state['gantt_chart']存在但为空")
+        else:
+            logging.error("❌ state中没有'gantt_chart'键")
+            # 尝试创建
+            state["gantt_chart"] = gantt_backup if gantt_backup else ""
+            logging.info("🔧 已重新创建gantt_chart键")
 
         # 创建output文件夹
         output_dir = "./output"
@@ -896,6 +1040,17 @@ class ProposalAgent:
 
         # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
         report_content += f"{conclusion}\n\n"
+
+        # 添加甘特图部分 - 使用恢复后的甘特图
+        final_gantt_chart = gantt_chart if gantt_chart else gantt_backup
+        if final_gantt_chart and final_gantt_chart.strip():
+            report_content += "## 项目时间规划甘特图\n\n"
+            report_content += f"```mermaid\n{final_gantt_chart}\n```\n\n"
+            logging.info("✅ 甘特图已添加到最终报告")
+        else:
+            logging.warning("⚠️ 甘特图为空或无效，未添加到报告中")
+            logging.warning(f"甘特图值类型: {type(final_gantt_chart)}, 内容: '{final_gantt_chart}'")
+            logging.warning(f"备份甘特图值类型: {type(gantt_backup)}, 内容: '{gantt_backup}'")
 
         report_content += f"{final_references}\n\n"  # 参考文献部分自带 "## 参考文献" 标题
 
@@ -1114,6 +1269,8 @@ class ProposalAgent:
             "ref_counter": 1,      # 初始化参考文献计数器
             "final_references": "",
             "conclusion": "",
+            "gantt_chart": "",  # 确保甘特图字段正确初始化
+            "gantt_chart_backup": "",  # 添加备份字段
             "final_report_markdown": "" # 初始化最终报告字段
         }
         

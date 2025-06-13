@@ -57,3 +57,4 @@ class ProposalState(TypedDict):
     clarification_questions: List[str] # 新增：代理生成的澄清问题
     user_clarifications: str             # 用户提供的澄清信息
     revision_guidance: str               # 新增：评审后的修订指导
+    gantt_chart: str  # 确保这个字段存在

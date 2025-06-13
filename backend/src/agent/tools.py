@@ -357,3 +357,123 @@ def summarize_pdf(path: str, max_chars: int = 10000) -> Dict:
             "source_excerpt": source_excerpt, # 即使出错，也尝试返回已提取的部分
             "total_length": total_length
         }
+
+
+@tool
+def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -> Dict:
+    """生成项目甘特图的工具
+    
+    Args:
+        timeline_content: 包含时间规划的文本内容
+        research_field: 研究领域名称，用于图表标题
+        
+    Returns:
+        包含Mermaid甘特图代码的字典
+    """
+    logging.info(f"调用工具：generate_gantt_chart_tool")
+    logging.info(f"输入研究领域: {research_field}")
+    logging.info(f"输入时间线内容长度: {len(timeline_content)} 字符")
+    logging.info(f"时间线内容前200字符: {timeline_content[:200]}...")
+    
+    try:
+        # 构造甘特图生成提示
+        gantt_prompt = f"""
+        你是一个项目管理专家，需要根据提供的研究时间线内容生成Mermaid格式的甘特图。
+
+        **研究领域：** {research_field}
+        
+        **时间线内容：**
+        {timeline_content}
+        
+        **要求：**
+        1. 仔细分析时间线内容，提取关键的阶段、任务和时间节点
+        2. 将任务按逻辑分组为不同的section（如：文献调研、系统设计、实验评估等）
+        3. 生成标准的Mermaid甘特图语法
+        4. 使用合理的日期格式（YYYY-MM-DD）
+        5. 根据任务的重要性和依赖关系设置状态（done, active, 或不设置）
+        6. 确保时间安排合理，避免任务重叠冲突
+        
+        **输出格式要求：**
+        只输出纯净的Mermaid代码，格式如下：
+        ```mermaid
+        gantt
+            dateFormat  YYYY-MM-DD
+            title       [研究项目标题]
+            section [阶段名称1]
+            [任务名称1]    :done,   YYYY-MM-DD, YYYY-MM-DD
+            [任务名称2]    :active, YYYY-MM-DD, 30d
+            section [阶段名称2]
+            [任务名称3]    :        YYYY-MM-DD, 20d
+            [任务名称4]    :        YYYY-MM-DD, 25d
+        ```
+        
+        注意：
+        - 不要包含任何解释文字，只输出Mermaid代码
+        - 确保语法正确，可以直接渲染
+        - 如果时间线内容不够详细，请基于常见的研究项目流程进行合理推断
+        - 必须以"gantt"开头
+        """
+
+        # 调用LLM生成甘特图
+        llm = ChatOpenAI(
+            temperature=0,
+            model="qwen-plus",
+            base_url=base_url,
+            api_key=DASHSCOPE_API_KEY
+        )
+
+        logging.info(f"正在调用LLM生成甘特图...")
+        
+        response = llm.invoke([HumanMessage(content=gantt_prompt)])
+        gantt_content = response.content.strip()
+        
+        logging.info(f"LLM原始响应长度: {len(gantt_content)} 字符")
+        logging.info(f"LLM原始响应前500字符: {gantt_content[:500]}...")
+        
+        # 清理输出，确保只包含Mermaid代码
+        if "```mermaid" in gantt_content:
+            start = gantt_content.find("```mermaid") + 10
+            end = gantt_content.find("```", start)
+            if end != -1:
+                gantt_content = gantt_content[start:end].strip()
+                logging.info("✅ 成功提取mermaid代码块")
+        elif "```" in gantt_content:
+            start = gantt_content.find("```") + 3
+            end = gantt_content.find("```", start)
+            if end != -1:
+                gantt_content = gantt_content[start:end].strip()
+                logging.info("✅ 成功提取通用代码块")
+        else:
+            logging.info("⚠️ 未找到代码块标记，使用原始内容")
+        
+        # 验证甘特图内容
+        if not gantt_content.startswith("gantt"):
+            if gantt_content.strip():
+                gantt_content = "gantt\n" + gantt_content
+                logging.info("⚠️ 添加了缺失的'gantt'开头")
+            else:
+                logging.error("❌ 甘特图内容为空")
+                return {
+                    "gantt_chart": "",
+                    "status": "error",
+                    "message": "生成的甘特图内容为空"
+                }
+        
+        logging.info(f"✅ 最终甘特图内容长度: {len(gantt_content)} 字符")
+        logging.info(f"最终甘特图内容前300字符: {gantt_content[:300]}...")
+        
+        return {
+            "gantt_chart": gantt_content,
+            "status": "success",
+            "message": "甘特图生成成功"
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ 甘特图生成失败: {str(e)}")
+        import traceback
+        logging.error(f"详细错误信息: {traceback.format_exc()}")
+        return {
+            "gantt_chart": "",
+            "status": "error", 
+            "message": f"甘特图生成失败: {str(e)}"
+        }

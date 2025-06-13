@@ -86,5 +86,27 @@
         "required": ["path"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_gantt_chart_tool",
+      "description": "根据研究时间线内容生成Mermaid格式的项目甘特图，用于可视化项目进度规划",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timeline_content": {
+            "type": "string",
+            "description": "包含项目时间规划的文本内容"
+          },
+          "research_field": {
+            "type": "string",
+            "description": "研究领域名称，用于甘特图标题",
+            "default": ""
+          }
+        },
+        "required": ["timeline_content"]
+      }
+    }
   }
 ]
