@@ -1433,7 +1433,8 @@ class ProposalAgent:
             "conclusion": "",
             "gantt_chart": "",  # 确保甘特图字段正确初始化
             "gantt_chart_backup": "",  # 添加备份字段
-            "final_report_markdown": "" # 初始化最终报告字段
+            "final_report_markdown": "", # 初始化最终报告字段
+            "global_step_num": 0, # 初始化全局步骤计数器
         }
 
         logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
