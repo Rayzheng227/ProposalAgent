@@ -16,7 +16,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
 from .rag import generate_search_queries
 from langchain_openai import ChatOpenAI
-
+import datetime
+import time
+import scholarly
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 load_dotenv()
@@ -380,7 +382,7 @@ def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -
     
     try:
         # 构造甘特图生成提示
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
         gantt_prompt = f"""
         你是一个项目管理专家，需要根据提供的研究时间线内容生成Mermaid格式的甘特图。
 
@@ -493,7 +495,7 @@ def search_google_scholar_site_tool(query: str, max_results: int = 5) -> List[Di
         max_results:  最多返回条目数
 
     Returns:
-        List[Dict]: 每条包含 title, authors, year, url
+        List[Dict]: 每条包含 title, authors, year, url, abstract, citations, journal, doi
     """
     full_query = f"site:ieeexplore.ieee.org {query}"
     logging.info(f"在 Google Scholar 上执行 site 搜索: {full_query}")
@@ -503,13 +505,68 @@ def search_google_scholar_site_tool(query: str, max_results: int = 5) -> List[Di
         for i, pub in enumerate(search_gen):
             if i >= max_results:
                 break
-            bib = pub.bib
-            results.append({
-                "title":   bib.get("title", ""),
-                "authors": bib.get("author", ""),
-                "year":    bib.get("year", ""),
-                "url":     bib.get("url", ""),
-            })
+                
+            # 获取完整论文信息
+            try:
+                pub = scholarly.fill(pub)
+                bib = pub.bib
+                
+                # 提取摘要
+                abstract = ""
+                if hasattr(pub, 'abstract'):
+                    abstract = pub.abstract
+                elif 'abstract' in bib:
+                    abstract = bib['abstract']
+                
+                # 提取引用数
+                citations = 0
+                if hasattr(pub, 'num_citations'):
+                    citations = pub.num_citations
+                
+                # 提取期刊信息
+                journal = ""
+                if 'journal' in bib:
+                    journal = bib['journal']
+                elif 'publisher' in bib:
+                    journal = bib['publisher']
+                
+                # 提取DOI
+                doi = ""
+                if 'doi' in bib:
+                    doi = bib['doi']
+                
+                results.append({
+                    "title": bib.get("title", ""),
+                    "authors": bib.get("author", ""),
+                    "year": bib.get("year", ""),
+                    "url": bib.get("url", ""),
+                    "abstract": abstract,
+                    "citations": citations,
+                    "journal": journal,
+                    "doi": doi,
+                    "keywords": bib.get("keywords", ""),
+                    "eprint": bib.get("eprint", ""),
+                    "venue": bib.get("venue", ""),
+                    "volume": bib.get("volume", ""),
+                    "number": bib.get("number", ""),
+                    "pages": bib.get("pages", "")
+                })
+                
+                # 添加延迟以避免被封禁
+                time.sleep(2)
+                
+            except Exception as e:
+                logging.warning(f"获取论文详细信息失败: {str(e)}")
+                # 如果获取详细信息失败，至少返回基本信息
+                bib = pub.bib
+                results.append({
+                    "title": bib.get("title", ""),
+                    "authors": bib.get("author", ""),
+                    "year": bib.get("year", ""),
+                    "url": bib.get("url", ""),
+                    "error": f"获取详细信息失败: {str(e)}"
+                })
+        
         return results
 
     except Exception as e:

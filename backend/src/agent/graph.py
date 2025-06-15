@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Tuple
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -22,7 +22,7 @@ import logging
 from .prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
-from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool
+from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool, search_google_scholar_site_tool
 from .state import ProposalState
 from ..utils.queue_util import QueueUtil
 from ..utils.stream_mes_util import StreamUtil
@@ -58,7 +58,7 @@ class ProposalAgent:
         # 设置Tavily API密钥
         # os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool]
+        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool, search_google_scholar_site_tool]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
 
@@ -474,6 +474,7 @@ class ProposalAgent:
                 "search_web_content": search_web_content_tool,
                 "search_crossref_papers": search_crossref_papers_tool,
                 "summarize_pdf": summarize_pdf,
+                "search_google_scholar_site": search_google_scholar_site_tool,
             }.get(action_name)
 
             if tool_to_call:
@@ -481,7 +482,7 @@ class ProposalAgent:
                 # 特定于工具的状态更新
                 if action_name == "search_arxiv_papers":
                     state["arxiv_papers"].extend(result or [])
-                elif action_name in ["search_web_content", "search_crossref_papers"]:
+                elif action_name in ["search_web_content", "search_crossref_papers", "search_google_scholar_site"]:
                     state["web_search_results"].extend(result or [])
                 elif action_name == "summarize_pdf" and result and "summary" in result:
                     for paper in state["arxiv_papers"]:
@@ -1554,7 +1555,7 @@ class ProposalAgent:
 
             response = None  # 初始化 response 变量
 
-            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef":
+            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef" or reference["type"] == "Google Scholar":
                 # 定义用户提示给LLM
                 user_prompt = f"""Query: {research_field}
     Document: {reference.get('summary', '')}
@@ -1650,3 +1651,39 @@ class ProposalAgent:
                 content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
             )
             return reference_list
+
+    def execute_action(self, action_name: str, action_input: Dict[str, Any], state: ProposalState) -> Tuple[Dict[str, Any], ProposalState]:
+        """执行动作"""
+        try:
+            # 获取对应的工具函数
+            tool_func = {
+                "search_arxiv_papers": search_arxiv_papers_tool,
+                "search_web_content": search_web_content_tool,
+                "search_crossref_papers": search_crossref_papers_tool,
+                "summarize_pdf": summarize_pdf,
+                "generate_gantt_chart": generate_gantt_chart_tool,
+                "search_google_scholar": search_google_scholar_site_tool,  # 修改工具名称
+            }.get(action_name)
+
+            if not tool_func:
+                raise ValueError(f"未知或不支持的 action: {action_name}")
+
+            # 执行工具函数
+            result = tool_func(**action_input)
+
+            # 更新状态
+            if action_name == "search_arxiv_papers":
+                state["arxiv_papers"].extend(result or [])
+            elif action_name in ["search_web_content", "search_crossref_papers", "search_google_scholar"]:  # 更新工具名称
+                state["web_search_results"].extend(result or [])
+            elif action_name == "summarize_pdf" and result and "summary" in result:
+                state["pdf_summaries"].append(result)
+            elif action_name == "generate_gantt_chart" and result:
+                state["gantt_chart"] = result
+                state["gantt_chart_backup"] = result  # 保存备份
+
+            return result, state
+
+        except Exception as e:
+            logging.error(f"执行动作 {action_name} 失败: {str(e)}")
+            return {"error": str(e)}, state
