@@ -7,7 +7,7 @@
 </p>
 
 # ProposalAgent
-A Proposal Agent for Advanced AI Course in HIAS
+A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization
 # Team Member
 郑锐、谢秋云、樊彬峰、禚宣伟、吴业阳
 
