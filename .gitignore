@@ -15,7 +15,7 @@ exporter/pdf_output/*
 !exporter/pdf_output/figures/mermaid_images/
 # 不保留 mermaid_images 下的内容
 exporter/pdf_output/figures/mermaid_images/*
-
+backend/src/agent/__pycache__
 # 但保留 .gitkeep 占位符文件
 !Papers/.gitkeep
 !output/.gitkeep
