@@ -15,7 +15,7 @@ from crossref.restful import Works
 from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
 from langchain_openai import ChatOpenAI
-import backend.src.agent.rag as rag
+import src.agent.rag as rag
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 load_dotenv()

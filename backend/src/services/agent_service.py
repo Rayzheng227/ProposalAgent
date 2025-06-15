@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from backend.src.agent.graph import ProposalAgent
+from src.agent.graph import ProposalAgent
 import os
 
 
@@ -8,7 +8,9 @@ def agent_service(proposal_id: str, research_question: str):
     # 测试PDF摘要功能
     # pdf_result = summarize_pdf.invoke({"path": "./papers/test.pdf"})
     # print("PDF摘要测试:", pdf_result)
+    print("2321")
     agent = ProposalAgent()
+    print("000")
     result = agent.generate_proposal(research_question, proposal_id)
     print("\n" + "=" * 60)
     # print("计划:")

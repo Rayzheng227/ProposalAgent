@@ -19,14 +19,14 @@ import json
 import os
 from datetime import datetime
 import logging
-from backend.src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
+from src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool
 from .state import ProposalState
-from backend.src.utils.queue_util import QueueUtil
-from backend.src.utils.stream_mes_util import StreamUtil
-from backend.src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
+from src.utils.queue_util import QueueUtil
+from src.utils.stream_mes_util import StreamUtil
+from src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -49,7 +49,7 @@ class ProposalAgent:
         """初始化ProposalAgent"""
         self.llm = ChatOpenAI(
             api_key=DASHSCOPE_API_KEY,
-            model="qwen-plus",
+            model="qwen-plus-latest",
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             temperature=0,
             streaming=True,  # 统一为流式输出
@@ -61,7 +61,12 @@ class ProposalAgent:
         self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
-
+        
+        # 先编译工作流，后初始化可能有问题的组件
+        print("先编译工作流...")
+        self.workflow = self._build_workflow()
+        
+        print("再初始化向量数据库...")
         # 初始化长期记忆
         self.embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.long_term_memory = Chroma(
@@ -70,7 +75,7 @@ class ProposalAgent:
             persist_directory="./chroma_db"  # 持久化存储路径
         )
 
-        self.workflow = self._build_workflow()
+        # self.workflow = self._build_workflow()
 
     def load_tools_description(self) -> List[Dict]:
         """从JSON文件加载工具描述"""
@@ -123,7 +128,7 @@ class ProposalAgent:
         existing_questions = state.get("clarification_questions", [])
         revision_guidance = state.get("revision_guidance", "")
 
-        # 如果有修订指导，跳过生成澄清问题
+        # 如果有修订指导，跳过生成澄清问题（改进流程中不需要澄清）
         if revision_guidance:
             logging.info(f"📝 检测到修订指导，跳过澄清问题生成步骤")
             state["clarification_questions"] = []
@@ -204,50 +209,11 @@ class ProposalAgent:
             for i, doc in enumerate(retrieved_docs):
                 retrieved_knowledge_text += f"\n--- 相关历史项目 {i + 1} ---\n"
                 retrieved_knowledge_text += doc.page_content
-                retrieved_knowledge_text += "\n--------------------------\n"
-        # ------------------------------------
-
-        # --- 从长期记忆中检索相关信息 ---
-        logging.info(f"🔍 正在从长期记忆中检索与 '{research_field_original}' 相关的信息...")
-        try:
-            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2)  # 检索最相关的2个
-        except Exception as e:
-            logging.warning(f"⚠️ 从长期记忆中检索信息失败: {e}")
-            retrieved_docs = []
-
-        retrieved_knowledge_text = ""
-        if retrieved_docs:
-            logging.info(f"✅ 从长期记忆中检索到 {len(retrieved_docs)} 条相关记录。")
-            retrieved_knowledge_text += "\n\n### 供参考的历史研究项目摘要\n"
-            retrieved_knowledge_text += "这是过去完成的类似研究项目，你可以借鉴它们的思路和结论，但不要照搬。\n"
-            for i, doc in enumerate(retrieved_docs):
-                retrieved_knowledge_text += f"\n--- 相关历史项目 {i + 1} ---\n"
-                retrieved_knowledge_text += doc.page_content
-                retrieved_knowledge_text += "\n--------------------------\n"
-        # ------------------------------------
-
-        # --- 从长期记忆中检索相关信息 ---
-        logging.info(f"🔍 正在从长期记忆中检索与 '{research_field_original}' 相关的信息...")
-        try:
-            retrieved_docs = self.long_term_memory.similarity_search(research_field_original, k=2)  # 检索最相关的2个
-        except Exception as e:
-            logging.warning(f"⚠️ 从长期记忆中检索信息失败: {e}")
-            retrieved_docs = []
-
-        retrieved_knowledge_text = ""
-        if retrieved_docs:
-            logging.info(f"✅ 从长期记忆中检索到 {len(retrieved_docs)} 条相关记录。")
-            retrieved_knowledge_text += "\n\n### 供参考的历史研究项目摘要\n"
-            retrieved_knowledge_text += "这是过去完成的类似研究项目，你可以借鉴它们的思路和结论，但不要照搬。\n"
-            for i, doc in enumerate(retrieved_docs):
-                retrieved_knowledge_text += f"\n--- 相关历史项目 {i + 1} ---\n"
-                retrieved_knowledge_text += doc.page_content
-                retrieved_knowledge_text += "\n--------------------------\n"
-        # ------------------------------------
+                retrieved_knowledge_text += "\n--------------------------\n"        # ------------------------------------
 
         # 构建提示文本
         prompt_additions = []
-
+        
         if user_clarifications:
             clarification_text = (
                 f"\n\n重要参考：用户为进一步聚焦研究方向，提供了以下澄清信息。在制定计划时，请务必仔细考虑这些内容：\n"
@@ -255,9 +221,12 @@ class ProposalAgent:
             )
             prompt_additions.append(clarification_text)
             logging.info("📝 使用用户提供的澄清信息来指导总体规划。")
+            logging.info(f"📝 澄清信息长度: {len(user_clarifications)} 字符")
+        else:
+            logging.info("📝 无用户澄清信息")
 
         if revision_guidance:
-            # 提取修订指南的摘要部分
+            logging.info("📝 检测到修订指导，开始处理...")            # 提取修订指南的摘要部分
             revision_summary = ""
             lines = revision_guidance.split("\n")
             in_key_issues = False
@@ -286,10 +255,32 @@ class ProposalAgent:
             )
             prompt_additions.append(revision_text)
             logging.info("📝 使用评审反馈的修订指导来改进计划。")
+        else:
+            logging.info("📝 无修订指导")
 
         # 构建完整提示
-        base_prompt_template = master_plan_instruction  # 从 prompts.py 导入
+        logging.info("🔧 开始构建提示模板...")
+        try:
+            base_prompt_template = master_plan_instruction  # 从 prompts.py 导入
+            logging.info(f"✅ 成功获取基础提示模板，长度: {len(base_prompt_template)} 字符")
+        except NameError as e:
+            logging.error(f"❌ master_plan_instruction 未定义: {e}")
+            # 使用一个简单的默认模板
+            base_prompt_template = """
+            请为以下研究领域制定一个详细的研究计划：
 
+            研究领域：{research_field}
+
+            可用工具：
+            {tools_info}
+
+            请生成一个包含研究目标、方法论和预期成果的详细计划。
+            """
+            logging.info("✅ 使用默认提示模板")
+        except Exception as e:
+            logging.error(f"❌ 获取提示模板时出错: {e}")
+            return state
+            
         lines = base_prompt_template.splitlines()
         new_lines = []
         inserted = False
@@ -302,29 +293,50 @@ class ProposalAgent:
 
         if not inserted and prompt_additions:  # 后备：如果占位符未找到，则追加
             new_lines.extend(prompt_additions)
-
+            
         modified_master_plan_prompt_template = "\n".join(new_lines)
-
+        
         master_planning_prompt = modified_master_plan_prompt_template.format(
             research_field=research_field_original,  # 此处使用原始研究领域
             tools_info=tools_info
         )
-
+        
         # 将所有上下文信息整合到最终的提示中
         final_prompt = (
             f"{master_planning_prompt}\n"
-            # f"{clarification_text}\n"
             f"{retrieved_knowledge_text}"
         )
-
+        
         logging.info(f"🤖 Agent正在为 '{research_field_original}' (已考虑用户澄清和历史知识) 制定总体研究计划...")
-
-        full_content = StreamUtil.transfer_stream_answer_mes(
-            stream_res=self.llm.stream([HumanMessage(master_planning_prompt)]),
-            proposal_id=state["proposal_id"],
-            step=state["global_step_num"],
-            title="生成计划"
-        )
+          # 添加调试信息
+        logging.info(f"📋 最终提示长度: {len(final_prompt)} 字符")
+        logging.info(f"📋 提示前500字符: {final_prompt[:500]}...")
+        
+        try:
+            logging.info("🔄 开始调用LLM stream...")
+            
+            # 首先尝试一个简单的测试调用
+            test_response = self.llm.invoke([HumanMessage("请回答：1+1等于几？")])
+            logging.info(f"✅ LLM 测试调用成功: {test_response.content}")
+            
+            # 然后进行实际的stream调用
+            stream_response = self.llm.stream([HumanMessage(final_prompt)])
+            logging.info("✅ LLM stream 创建成功，开始处理响应...")
+            
+            full_content = StreamUtil.transfer_stream_answer_mes(
+                stream_res=stream_response,
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成计划"
+            )
+            logging.info(f"✅ LLM 响应处理完成，内容长度: {len(full_content)} 字符")
+            
+        except Exception as e:
+            logging.error(f"❌ LLM 调用失败: {str(e)}")
+            import traceback
+            logging.error(f"详细错误信息: {traceback.format_exc()}")
+            # 设置一个默认的研究计划以避免系统完全卡死
+            full_content = f"由于技术问题，无法完成详细的研究计划生成。研究主题：{research_field_original}"
 
         state["research_plan"] = full_content
         # response = self.llm.invoke([HumanMessage(content=final_prompt)])
@@ -708,6 +720,7 @@ class ProposalAgent:
 
         research_field = state["research_field"]
         research_plan = state["research_plan"]
+        revision_guidance = state.get("revision_guidance", "")  # 获取修订指导
 
         rank_reference_list = self.rerank_with_llm(state)
         # 先进行重排序，但不重新分配ID
@@ -732,7 +745,16 @@ class ProposalAgent:
         5. 如果某个观点来自多个文献，可以使用 [1,2] 的格式
         6. 你所引用的内容必须真实来自文献列表
         """
-    
+        # 构建提示，如果有修订指导则包含
+        revision_instruction = ""
+        if revision_guidance:
+            revision_instruction = f"""
+        
+        **修订指导（请特别注意）：**
+        {revision_guidance}
+        
+        请根据上述修订指导对引言部分进行针对性改进。
+        """
 
         # 使用prompts.py中的instruction
         introduction_prompt = f"""
@@ -749,6 +771,8 @@ class ProposalAgent:
         
         **真实的文献列表**
         {state["reference_list"]}
+        
+        {revision_instruction}
 
         请基于以上信息，按照instruction的要求，为"{research_field}"这个研究主题撰写一个学术规范的引言部分。
         
@@ -939,14 +963,21 @@ class ProposalAgent:
         """
 
         logging.info("🔬 正在生成研究计划书研究设计部分...")
-        full_content = StreamUtil.transfer_stream_answer_mes(
-            stream_res=self.llm.stream([HumanMessage(research_design_prompt)]),
-            proposal_id=state["proposal_id"],
-            step=state["global_step_num"],
-            title="生成研究"
-        )
-        state["research_design"] = full_content
-        logging.info("✅ 研究设计部分生成完成")
+        try:
+            full_content = StreamUtil.transfer_stream_answer_mes(
+                stream_res=self.llm.stream([HumanMessage(research_design_prompt)]),
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成研究"
+            )
+            state["research_design"] = full_content
+            logging.info("✅ 研究设计部分生成完成")
+            logging.info(f"研究设计内容长度: {len(full_content)} 字符")
+        except Exception as e:
+            logging.error(f"❌ 研究设计生成失败: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            state["research_design"] = f"研究设计生成失败: {str(e)}"
 
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
@@ -954,20 +985,22 @@ class ProposalAgent:
             title="",
             content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
         )
+        
+        # 添加调试信息，确认方法完成并准备进入下一节点
+        logging.info("🔄 write_research_design_node 完成，准备进入 write_conclusion_node")
         return state
 
     def write_conclusion_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的结论部分"""
+        logging.info("🔄 进入 write_conclusion_node")
         state["global_step_num"] += 1
         start_time = time.time()
 
         research_field = state["research_field"]
         introduction_content = state.get("introduction", "")
         literature_review_content = state.get("literature_review", "")
-        research_design_content = state.get("research_design", "")
-
-        # 为结论部分也添加文献引用能力
-        literature_summary = self.get_literature_summary_with_refs(state, step=7)
+        research_design_content = state.get("research_design", "")        # 为结论部分也添加文献引用能力
+        literature_summary = self.get_literature_summary_with_refs(state)
         
         # 结论部分的引用指导
         citation_instruction = """
@@ -1008,15 +1041,23 @@ class ProposalAgent:
         """
 
         logging.info("📜 正在生成研究计划书结论部分...")
-        full_content = StreamUtil.transfer_stream_answer_mes(
-            stream_res=self.llm.stream([HumanMessage(conclusion_prompt_text)]),
-            proposal_id=state["proposal_id"],
-            step=state["global_step_num"],
-            title="生成结论"
-        )
-        state["conclusion"] = full_content
-        logging.info("✅ 结论部分生成完成")
-        logging.info(f"结论内容长度: {len(full_content)} 字符")
+        try:
+            full_content = StreamUtil.transfer_stream_answer_mes(
+                stream_res=self.llm.stream([HumanMessage(conclusion_prompt_text)]),
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成结论"
+            )
+            state["conclusion"] = full_content
+            logging.info("✅ 结论部分生成完成")
+            logging.info(f"结论内容长度: {len(full_content)} 字符")
+        except Exception as e:
+            logging.error(f"❌ 结论部分生成失败: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            state["conclusion"] = f"结论部分生成失败: {str(e)}"
+            # 即使结论生成失败，也继续后续流程
+            full_content = state["conclusion"]
 
         # 生成甘特图
         logging.info("📊 正在生成项目甘特图...")
@@ -1169,10 +1210,16 @@ class ProposalAgent:
         report_filename = f"Research_Proposal_{proposal_id}.md"
         references_filename = f"References_{proposal_id}.json"
         report_filepath = os.path.join(output_dir, report_filename)
-        references_filepath = os.path.join(output_dir, references_filename)
-
-        # 构建Markdown内容
-        report_content = f"# 研究计划书：{research_field}\n\n"
+        references_filepath = os.path.join(output_dir, references_filename)        # 构建Markdown内容，如果是改进版本则添加标识
+        revision_guidance = state.get("revision_guidance", "")
+        improvement_attempt = state.get("improvement_attempt", 0)
+        
+        if revision_guidance and improvement_attempt > 0:
+            report_content = f"# 研究计划书：{research_field}（改进版 v{improvement_attempt}）\n\n"
+            report_content += "## 改进说明\n\n"
+            report_content += f"本版本基于评审意见进行了针对性改进，改进轮次：第{improvement_attempt}轮\n\n"
+        else:
+            report_content = f"# 研究计划书：{research_field}\n\n"
 
         # report_content += "## 1. 引言\n\n"
         report_content += f"{introduction}\n\n"
@@ -1250,8 +1297,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time),
-                is_finish=True
+                content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)
             ))
         except Exception as e:
             logging.error(f"❌ 保存最终报告失败: {e}")
@@ -1260,10 +1306,154 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content="\n\n❌ 处理失败，共耗时 %.2fs" % (time.time() - start_time),
-                is_finish=True
+                content="\n\n❌ 处理失败，共耗时 %.2fs" % (time.time() - start_time)
             ))
 
+        return state
+
+    def review_proposal_node(self, state: ProposalState) -> ProposalState:
+        """对生成的研究计划书进行评审"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+        
+        # 提取需要评审的内容
+        report_content = state.get("final_report_markdown", "")
+        if not report_content or report_content == "报告生成失败":
+            logging.warning("⚠️ 没有可评审的内容，跳过评审步骤")
+            state["review_result"] = {"success": False, "error": "没有可评审的内容"}
+            return state
+        
+        research_field = state.get("research_field", "")
+        
+        logging.info("🔍 开始评审研究计划书...")
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="评审计划书",
+            content="\n正在评审研究计划书..."
+        ))
+        
+        # 初始化ReviewerAgent并进行评审
+        try:
+            from src.reviewer.reviewer import ReviewerAgent
+            reviewer = ReviewerAgent()
+            review_result = reviewer.review_proposal(report_content, research_field)
+            
+            if review_result.get("success"):
+                # 评审成功，保存评审结果
+                state["review_result"] = review_result
+                logging.info(f"🔍 评审成功，正在保存评审结果到状态中...")
+                logging.info(f"🔍 保存的review_result keys: {list(review_result.keys())}")
+                
+                scores = review_result.get("llm_scores", {})
+                overall_score = scores.get("总体评分", 0)
+                logging.info(f"🔍 从review_result中提取的总体评分: {overall_score}")
+                
+                score_message = f"\n✅ 评审完成，总体评分：{overall_score}/10"
+                for criterion, score in scores.items():
+                    if criterion != "总体评分":
+                        score_message += f"\n- {criterion}: {score}/10"
+                        
+                QueueUtil.push_mes(StreamAnswerMes(
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="",
+                    content=score_message
+                ))
+                
+                # 记录主要优缺点
+                strengths = review_result.get("strengths", [])
+                weaknesses = review_result.get("weaknesses", [])
+                
+                if strengths:
+                    strength_text = "\n\n**主要优势**:\n" + "\n".join([f"- {s}" for s in strengths[:3]])
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content=strength_text
+                    ))
+                    
+                if weaknesses:
+                    weakness_text = "\n\n**主要不足**:\n" + "\n".join([f"- {w}" for w in weaknesses[:3]])
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content=weakness_text
+                    ))
+                
+                # 保存评审结果到文件
+                try:
+                    # 创建reviews目录
+                    reviews_dir = Path(__file__).parent.parent.parent.parent / "output" / "reviews"
+                    if not os.path.exists(reviews_dir):
+                        os.makedirs(reviews_dir)
+                    
+                    # 生成评审结果文件名
+                    proposal_id = state["proposal_id"]
+                    review_filename = f"Review_{proposal_id}.json"
+                    review_filepath = os.path.join(reviews_dir, review_filename)
+                    
+                    # 保存评审结果为JSON文件
+                    with open(review_filepath, 'w', encoding='utf-8') as review_file:
+                        json.dump(review_result, review_file, ensure_ascii=False, indent=2)
+                    
+                    logging.info(f"✅ 评审结果已保存到: {review_filepath}")
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content=f"\n📄 评审结果已保存到: {review_filepath}"
+                    ))
+                except Exception as save_e:
+                    logging.error(f"❌ 保存评审结果失败: {save_e}")
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content=f"\n⚠️ 评审结果保存失败: {save_e}"
+                    ))
+            else:                # 评审失败
+                error_msg = review_result.get("error", "未知错误")
+                logging.error(f"❌ 评审失败: {error_msg}")
+                state["review_result"] = review_result
+                QueueUtil.push_mes(StreamAnswerMes(
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="",
+                    content=f"\n❌ 评审失败: {error_msg}"
+                ))
+    
+        except Exception as e:
+            logging.error(f"❌ 评审过程异常: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            state["review_result"] = {"success": False, "error": str(e)}
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content=f"\n❌ 评审过程异常: {str(e)}"
+            ))
+    
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)
+        ))
+        
+        # 调试：确认评审结果是否正确保存到状态中
+        saved_review_result = state.get("review_result", {})
+        logging.info(f"🔍 评审节点结束时，状态中的review_result存在: {saved_review_result.get('success', False)}")
+        if saved_review_result.get("success"):
+            saved_scores = saved_review_result.get("llm_scores", {})
+            saved_overall = saved_scores.get("总体评分", 0)
+            logging.info(f"🔍 评审节点结束时，保存的总体评分: {saved_overall}")
+        else:
+            logging.warning("⚠️ 评审节点结束时，状态中没有有效的评审结果")
+        
         return state
 
     def should_continue(self, state: ProposalState) -> str:
@@ -1305,9 +1495,7 @@ class ProposalAgent:
         if len(arxiv_papers) >= 5 and len(web_results) >= 5:
             logging.info(
                 f"📚 已收集充足信息 ({len(arxiv_papers)} 篇论文, {len(web_results)} 条网络结果)，提前进入写作阶段")
-            return "end_report"
-
-        # 7. 检查最近执行结果质量（智能重规划）
+            return "end_report"        # 7. 检查最近执行结果质量（智能重规划）
         if len(execution_memory) >= 3:
             recent_results = execution_memory[-3:]
             successful_results = [r for r in recent_results if r.get("success", False)]
@@ -1322,7 +1510,327 @@ class ProposalAgent:
         logging.info(f"🚀 继续执行步骤 {current_step_index + 1}/{max_steps}")
         return "continue"
 
-    def _build_workflow(self) -> StateGraph:  # This method uses _decide_after_clarification
+    def should_improve(self, state: ProposalState) -> str:
+        """决定是否需要进行改进"""
+    
+        review_result = state.get("review_result", {})
+        logging.info(f"🔍 should_improve: 检查评审结果")
+        logging.info(f"review_result类型: {type(review_result)}")
+        logging.info(f"review_result keys: {list(review_result.keys()) if review_result else 'None'}")
+        logging.info(f"完整的review_result: {review_result}")
+        
+        # 详细记录获取评分的过程
+        llm_scores = review_result.get("llm_scores", {})
+        logging.info(f"llm_scores类型: {type(llm_scores)}")
+        logging.info(f"llm_scores: {llm_scores}")
+        
+        overall_score = llm_scores.get("总体评分", 0)
+        logging.info(f"获取到的总体评分: {overall_score} (类型: {type(overall_score)})")
+          # 如果无法获取有效的评审结果，尝试从文件中读取
+        if not review_result or not review_result.get("success", False):
+            logging.warning("⚠️ 状态中无法获取有效的评审结果，尝试从文件中读取")
+            
+            try:
+                # 尝试从JSON文件中读取评审结果
+                proposal_id = state.get("proposal_id", "")
+                if proposal_id:
+                    reviews_dir = Path(__file__).parent.parent.parent.parent / "output" / "reviews"
+                    review_filepath = reviews_dir / f"Review_{proposal_id}.json"
+                    
+                    if review_filepath.exists():
+                        logging.info(f"📁 尝试从文件读取评审结果: {review_filepath}")
+                        with open(review_filepath, 'r', encoding='utf-8') as f:
+                            file_review_result = json.load(f)
+                        
+                        if file_review_result.get("success", False):
+                            logging.info("✅ 成功从文件中读取到有效的评审结果")
+                            review_result = file_review_result
+                            # 重新获取评分信息
+                            llm_scores = review_result.get("llm_scores", {})
+                            overall_score = llm_scores.get("总体评分", 0)
+                            logging.info(f"📁 从文件获取的总体评分: {overall_score}")
+                        else:
+                            logging.warning("⚠️ 文件中的评审结果也无效")
+                    else:
+                        logging.warning(f"⚠️ 评审结果文件不存在: {review_filepath}")
+            except Exception as e:
+                logging.error(f"❌ 从文件读取评审结果失败: {e}")
+            
+            # 如果仍然无法获取有效结果，强制进行改进
+            if not review_result or not review_result.get("success", False):
+                logging.warning("⚠️ 最终无法获取有效的评审结果，强制进行改进")
+                return "improve"
+          # 重新获取评分信息（可能从文件中更新了review_result）
+        llm_scores = review_result.get("llm_scores", {})
+        logging.info(f"llm_scores类型: {type(llm_scores)}")
+        logging.info(f"llm_scores: {llm_scores}")
+        
+        overall_score = llm_scores.get("总体评分", 0)
+        logging.info(f"最终获取到的总体评分: {overall_score} (类型: {type(overall_score)})")
+        
+        # 如果无法获取评分，强制进行改进    
+        if overall_score == 0 or not isinstance(overall_score, (int, float)):
+            logging.warning(f"⚠️ 无法获取有效的评审分数 ({overall_score})，强制进行改进")
+            return "improve"
+        
+        # 设置评分阈值，低于此分数则进行改进
+        improvement_threshold = 8.5
+        
+        # 如果已经尝试改进一次，不再进行第二次改进
+        if state.get("improvement_attempt", 0) > 0:
+            logging.info(f"已尝试改进 {state['improvement_attempt']} 次，不再继续改进")
+            return "finalize"
+        
+        if overall_score < improvement_threshold:
+            logging.info(f"评审得分 ({overall_score}) 低于阈值 ({improvement_threshold})，准备进行改进")
+            return "improve"
+        else:
+            logging.info(f"评审得分 ({overall_score}) 达到或超过阈值 ({improvement_threshold})，无需改进")
+            return "finalize"
+
+    def generate_revision_guidance_node(self, state: ProposalState) -> ProposalState:
+        """根据评审结果生成修订指导"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+        
+        review_result = state.get("review_result", {})
+        research_field = state.get("research_field", "")
+        
+        if not review_result.get("success", False):
+            logging.warning("⚠️ 评审结果无效，无法生成修订指导")
+            state["revision_guidance"] = "无有效评审结果"
+            return state
+        
+        logging.info("📝 正在根据评审结果生成修订指导...")
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="生成修订指导",
+            content="\n正在生成修订指导..."
+        ))
+        
+        try:
+            # 导入ReviewerAgent
+            from src.reviewer.reviewer import ReviewerAgent
+            reviewer = ReviewerAgent()
+            
+            # 使用ReviewerAgent生成修订指导
+            guidance_result = reviewer.generate_revision_guidance(
+                review_result=review_result,
+                research_field=research_field
+            )
+            
+            if guidance_result.get("success", False):
+                # 将修订指导转换为文本格式
+                revision_focus = guidance_result.get("revision_focus", "")
+                revision_instructions = guidance_result.get("revision_instructions", [])
+                
+                revision_text = f"# 修订指导\n\n## 修订重点\n{revision_focus}\n\n## 修订指南\n"
+                
+                for i, instruction in enumerate(revision_instructions, 1):
+                    target = instruction.get("target_section", "全部")
+                    operation = instruction.get("operation", "修改")
+                    specific = instruction.get("specific_instruction", "")
+                    reason = instruction.get("reasoning", "")
+                    
+                    revision_text += f"### {i}. {target}部分 - {operation}\n"
+                    revision_text += f"- 具体指导: {specific}\n"
+                    revision_text += f"- 原因: {reason}\n\n"
+                
+                # 保存修订指导
+                state["revision_guidance"] = revision_text
+                state["revision_guidance_structured"] = guidance_result
+                state["improvement_attempt"] = state.get("improvement_attempt", 0) + 1
+                
+                QueueUtil.push_mes(StreamAnswerMes(
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="",
+                    content=f"\n\n✅ 修订指导生成完成:\n\n{revision_text[:500]}..."
+                ))
+            else:
+                error_msg = guidance_result.get("error", "未知错误")
+                logging.error(f"❌ 生成修订指导失败: {error_msg}")
+                state["revision_guidance"] = f"生成修订指导失败: {error_msg}"
+                QueueUtil.push_mes(StreamAnswerMes(
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="",
+                    content=f"\n❌ 生成修订指导失败: {error_msg}"
+                ))
+    
+        except Exception as e:
+            logging.error(f"❌ 修订指导生成异常: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            state["revision_guidance"] = f"修订指导生成异常: {str(e)}"
+            QueueUtil.push_mes(StreamAnswerMes(                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content=f"\n❌ 修订指导生成异常: {str(e)}"
+            ))
+    
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)
+        ))
+        return state
+
+    def apply_improvements_node(self, state: ProposalState) -> ProposalState:
+        """根据修订指导重新生成改进后的研究计划书"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+        
+        # 增加改进尝试次数
+        state["improvement_attempt"] = state.get("improvement_attempt", 0) + 1
+        logging.info(f"🔄 开始第 {state['improvement_attempt']} 次改进尝试")
+    
+        revision_guidance = state.get("revision_guidance", "")
+        research_field = state.get("research_field", "")
+        user_clarifications = state.get("user_clarifications", "")
+        proposal_id = state.get("proposal_id", "")
+    
+        if not revision_guidance or revision_guidance.startswith("生成修订指导失败"):
+            logging.warning("⚠️ 无有效修订指导，跳过改进步骤")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content="\n⚠️ 无有效修订指导，跳过改进步骤"
+            ))
+            return state
+    
+        logging.info("🔄 正在根据修订指导重新生成研究计划书...")
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="应用改进",
+            content="\n正在根据修订指导重新生成研究计划..."
+        ))        # 生成新的proposal_id用于区分改进前后的版本（但消息仍推送到原proposal_id）
+        improved_proposal_id = f"{proposal_id}_improved_{state.get('improvement_attempt', 1)}"
+    
+        # 保存原始报告
+        original_report = state.get("final_report_markdown", "")
+        original_report_path = ""
+        try:
+            # 创建output文件夹
+            output_dir = Path(__file__).parent.parent.parent.parent / "output"
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            
+            # 保存原始报告
+            original_filename = f"Research_Proposal_{proposal_id}_original.md"
+            original_report_path = os.path.join(output_dir, original_filename)
+            
+            with open(original_report_path, 'w', encoding='utf-8') as f:
+                f.write(original_report)
+            
+            logging.info(f"✅ 原始报告已保存到: {original_report_path}")
+        except Exception as e:
+            logging.error(f"❌ 保存原始报告失败: {e}")        # 直接在当前流程中重新生成内容，而不是创建新的Agent实例
+        try:
+            # 保存改进前的内容作为备份
+            state["original_introduction"] = state.get("introduction", "")
+            state["original_literature_review"] = state.get("literature_review", "")
+            state["original_research_design"] = state.get("research_design", "")
+            state["original_conclusion"] = state.get("conclusion", "")
+            state["original_final_report"] = state.get("final_report_markdown", "")
+            
+            # 重新生成各个部分（基于修订指导）
+            logging.info("🔄 根据修订指导重新生成引言部分...")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="改进引言",
+                content=f"\n🔄 根据修订指导重新生成引言部分..."
+            ))
+            
+            # 重新生成引言（已考虑修订指导）
+            state = self.write_introduction_node(state)
+            
+            logging.info("🔄 根据修订指导重新生成文献综述部分...")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="改进文献综述",
+                content=f"\n🔄 根据修订指导重新生成文献综述部分..."
+            ))
+            
+            # 重新生成文献综述
+            state = self.write_literature_review_node(state)
+            
+            logging.info("🔄 根据修订指导重新生成研究设计部分...")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="改进研究设计",
+                content=f"\n🔄 根据修订指导重新生成研究设计部分..."
+            ))
+            
+            # 重新生成研究设计
+            state = self.write_research_design_node(state)
+            
+            logging.info("🔄 根据修订指导重新生成结论部分...")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="改进结论",
+                content=f"\n🔄 根据修订指导重新生成结论部分..."
+            ))
+            
+            # 重新生成结论
+            state = self.write_conclusion_node(state)
+            
+            # 重新生成最终报告
+            logging.info("📄 重新生成最终改进报告...")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="生成改进报告",
+                content=f"\n� 重新生成最终改进报告..."
+            ))
+            
+            state = self.generate_final_references_node(state)
+            state = self.generate_final_report_node(state)
+            
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content=f"\n✅ 改进后的研究计划书已重新生成完成"
+            ))
+            
+            # 明确标记改进流程完成
+            state["improvement_completed"] = True
+            logging.info(f"🎯 改进流程已完成，improvement_attempt: {state.get('improvement_attempt', 0)}")
+            
+        except Exception as e:
+            logging.error(f"❌ 应用改进异常: {str(e)}")
+            import traceback
+            logging.error(f"详细异常信息: {traceback.format_exc()}")
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content=f"\n❌ 应用改进异常: {str(e)}"
+            ))
+            # 即使出错也标记完成，避免无限循环
+            state["improvement_completed"] = True
+        
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="",
+            content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time)
+        ))
+        
+        # 最终确认改进流程已结束，准备进入保存环节
+        logging.info("🔚 apply_improvements_node 完成，准备进入 save_memory")
+        return state
+
+    def _build_workflow(self) -> StateGraph:
         """构建工作流图"""
         workflow = StateGraph(ProposalState)
 
@@ -1341,24 +1849,19 @@ class ProposalAgent:
         workflow.add_node("write_conclusion", self.write_conclusion_node)
         workflow.add_node("generate_final_references", self.generate_final_references_node)
         workflow.add_node("generate_final_report", self.generate_final_report_node)
+        
+        # 评审和改进节点
+        workflow.add_node("review_proposal", self.review_proposal_node)
+        workflow.add_node("generate_revision_guidance", self.generate_revision_guidance_node)
+        workflow.add_node("apply_improvements", self.apply_improvements_node)
         workflow.add_node("save_memory", self.save_to_long_term_memory_node)  # 长期记忆节点
 
         # 2. 设置图的入口点
         workflow.set_entry_point("clarify_focus")
 
-        # # 3. 定义图的边（流程）
-        # workflow.add_conditional_edges(
-        #     "clarify_focus",
-        #     self._decide_after_clarification,
-        #     {
-        #         "end_for_user_input": END,
-        #         "proceed_to_master_plan": "create_master_plan"
-        #     }
-        # )
+        # 3. 基础流程
         workflow.add_edge("clarify_focus", "create_master_plan")
         workflow.add_edge("create_master_plan", "plan_analysis")
-
-        # 生成计划后，直接进入执行
         workflow.add_edge("plan_analysis", "execute_step")
 
         # 核心执行循环
@@ -1384,13 +1887,33 @@ class ProposalAgent:
         workflow.add_edge("write_research_design", "write_conclusion")
         workflow.add_edge("write_conclusion", "generate_final_references")
         workflow.add_edge("generate_final_references", "generate_final_report")
-
-        # 最后，保存到长期记忆并结束
-        workflow.add_edge("generate_final_report", "save_memory")
+        
+        # 关键修复：直接连接评审流程，去掉未定义的check_improvements节点
+        workflow.add_edge("generate_final_report", "review_proposal")
+        
+        # 评审后的条件分支：直接使用should_improve方法
+        workflow.add_conditional_edges(
+            "review_proposal",
+            self.should_improve,
+            {
+                "improve": "generate_revision_guidance",  # 需要改进
+                "finalize": "save_memory"  # 无需改进，直接保存
+            }
+        )
+        
+        # 改进流程
+        workflow.add_edge("generate_revision_guidance", "apply_improvements")
+        workflow.add_edge("apply_improvements", "save_memory")  # 改进后保存
         workflow.add_edge("save_memory", END)
 
         # 4. 编译图
-        return workflow.compile(checkpointer=MemorySaver())
+        try:
+            compiled_workflow = workflow.compile()
+            logging.info("✅ 工作流编译成功")
+            return compiled_workflow
+        except Exception as e:
+            logging.error(f"❌ 工作流编译失败: {e}")
+            raise e
 
     def generate_proposal(self, research_field: str, proposal_id: str, user_clarifications: str = "",
                           revision_guidance: str = "") -> Dict[str, Any]:
@@ -1404,6 +1927,7 @@ class ProposalAgent:
             "research_field": research_field,
             "user_clarifications": user_clarifications,  # 新增：接收用户澄清
             "revision_guidance": revision_guidance,
+            "improvement_attempt": 0,  # 记录改进次数
             "proposal_id": proposal_id,  # 新增：唯一标识符
             "clarification_questions": [],  # 新增：初始化澄清问题列表
             "query": "",
@@ -1433,17 +1957,32 @@ class ProposalAgent:
             "conclusion": "",
             "gantt_chart": "",  # 确保甘特图字段正确初始化
             "gantt_chart_backup": "",  # 添加备份字段
-            "final_report_markdown": "" # 初始化最终报告字段
+            "final_report_markdown": "", # 初始化最终报告字段
+            "global_step_num": 0 # 初始化全局步骤计数器
         }
 
         logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
 
         result = self.workflow.invoke(initial_state, config=config)
+        
+        # 检查工作流是否正常完成
+        # 如果已经有最终报告，说明工作流已完成，不应该再要求澄清
+        has_final_report = result.get("final_report_markdown", "")
+        improvement_completed = result.get("improvement_completed", False)
+        
+        # 只有在以下情况才返回澄清问题：
+        # 1. 没有修订指导（不是改进流程）
+        # 2. 没有最终报告（工作流未完成）
+        # 3. 没有完成改进流程
         clarification_questions = result.get("clarification_questions", [])
-        if clarification_questions:
-            logging.info(" agent生成澄清问题，等待用户输入")
+        if (clarification_questions and 
+            not revision_guidance and 
+            not has_final_report and 
+            not improvement_completed):
+            logging.info("🤔 Agent生成澄清问题，等待用户输入")
             return {"clarification_questions": clarification_questions}
-
+        
+        logging.info("✅ 工作流已完成，返回最终结果")
         return result
 
     def summarize_history_node(self, state: ProposalState) -> ProposalState:
@@ -1534,7 +2073,17 @@ class ProposalAgent:
 
     def save_to_long_term_memory_node(self, state: ProposalState) -> ProposalState:
         """将最终报告的核心洞察存入长期记忆"""
+        state["global_step_num"] += 1
+        start_time = time.time()
+        
         logging.info("💾 正在将本次研究成果存入长期记忆...")
+        
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state["global_step_num"],
+            title="保存成果",
+            content="\n💾 正在将研究成果存入知识库..."
+        ))
 
         proposal_id = state.get("proposal_id")
         if not proposal_id:
@@ -1561,8 +2110,16 @@ class ProposalAgent:
             # self.long_term_memory.persist() # 显式调用 persist() 可能不是必需的，但可以确保写入
             logging.info(f"✅ 成功将 proposal_id '{proposal_id}' 存入长期记忆。")
         except Exception as e:
-            logging.error(f"❌ 存入长期记忆失败: {e}")
-
+            logging.error(f"❌ 存入长期记忆失败: {e}")        # 发送最终完成消息给前端
+        QueueUtil.push_mes(StreamAnswerMes(
+            proposal_id=state["proposal_id"],
+            step=state.get("global_step_num", 0),
+            title="流程完成",
+            content=f"\n🎉 研究计划书生成完成！\n\n📄 最终报告已保存\n📚 参考文献已整理\n💾 成果已存入知识库\n\n✅ 所有流程已完成，可以下载结果文件。\n\n⏱️ 本阶段耗时: {time.time() - start_time:.2f}s",
+            is_finish=True
+        ))
+        
+        logging.info("🏁 整个流程已完成，已通知前端")
         return state
 
     def rerank_with_llm(self, state: ProposalState, relevance_threshold: float = 0.6) -> List[Dict]:

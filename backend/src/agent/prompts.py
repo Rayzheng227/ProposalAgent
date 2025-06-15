@@ -303,54 +303,27 @@ Use subheadings where appropriate. Ensure coherence with the Introduction and Li
 """
 
 CONCLUSION_PROMPT = """
-You are an academic assistant responsible for writing the **Conclusion section** of a research proposal.
+你是一位专业的学术写作专家，负责为研究计划书撰写结论部分。
 
-The user has already written the following parts:
-- ✅ Introduction (with research background, gap, and research questions)
-- ✅ Literature Review (analyzing prior work and framing the context)
-- ✅ Project Design (explaining data sources, methods, and research workflow)
+结论部分应该：
+1. **总结研究意义**：基于引言和文献综述，简要重申研究的重要性和必要性
+2. **概述研究设计**：简明总结所采用的研究方法和技术路线
+3. **制定时间规划**：提供详细的研究时间安排和里程碑
+4. **描述预期成果**：明确说明预期的研究产出和贡献
+5. **展望研究影响**：讨论研究的潜在影响和应用价值
 
-Your task is to **write a well-structured conclusion section in Chinese** for the proposal. **The entire output you generate, comprising the sub-sections '研究时间线', '预期成果', and '最终总结', will be used as the content for the '总结与展望' chapter of the research proposal.**
+请确保结论部分：
+- 与前文内容保持连贯性和一致性
+- 体现研究的创新性和可行性
+- 包含具体的时间节点和可衡量的成果
+- 使用学术化的语言和表达方式
+- 至少800字，结构清晰，逻辑严密
 
-This section should include:
+研究领域：{research_field}
 
----
-
-## ✍️ What to include (All content in Chinese):
-
-### 1. 研究时间线 (Timeline)
-- Present a realistic **timeline for completing the research project**, typically divided by months or phases (e.g., Month 1–3, 4–6…).
-- Link each time segment to corresponding activities: literature review, data collection, analysis, writing, editing, etc.
-- Reflect awareness of prior work already completed and upcoming milestones.
-- Mention any external research-related activities planned (e.g., submitting to conferences or journals).
-
-### 2. 预期成果 (Expected Outcomes)
-- List the key **deliverables** or outcomes expected from the research:
-  - Academic outputs (e.g., thesis, papers, prototypes, datasets)
-  - Contributions to theory or practice
-  - Potential publication or application opportunities
-- These should relate clearly to the research questions and methods outlined earlier.
-
-### 3. 最终总结 (Final Summary)
-- Concisely reaffirm the **importance of the research** and how it builds upon the earlier sections.
-- Emphasize feasibility and the contribution to the field.
-- Reconnect with the research gap identified in the Introduction and how the plan addresses it.
-
----
-
-## ✅ Format & Style (All content in Chinese)
-
-- Use **Markdown format** with section headers as specified below (use Markdown level-1 headers with Chinese titles):
-  - `# 研究时间线`
-  - `# 预期成果`
-  - `# 最终总结`
-- Use **academic, clear, and concise Chinese language**.
-- The total content should be around **500–700 words (Chinese characters)**.
-- Ensure it logically follows from the previous parts and avoids introducing completely new ideas.
-- **The combined output of these three sub-sections (研究时间线, 预期成果, 最终总结) should form a single, coherent text block intended for the '总结与展望' chapter.**
-
-📌 Important: The conclusion should leave the reader confident that the research plan is feasible, coherent, and valuable. **All output for this section must be in Chinese.**
+请基于已完成的引言、文献综述和研究设计部分，撰写一个完整的结论部分。
 """
+
 
 # 新增：用于生成澄清问题的Prompt (从graph.py移动过来)
 CLARIFICATION_QUESTION_PROMPT = """
