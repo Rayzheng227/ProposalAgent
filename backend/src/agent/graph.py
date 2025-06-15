@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Tuple
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -19,14 +19,14 @@ import json
 import os
 from datetime import datetime
 import logging
-from src.agent.prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
+from .prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
 import fitz
 from dotenv import load_dotenv
-from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool
+from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool, search_google_scholar_site_tool
 from .state import ProposalState
-from src.utils.queue_util import QueueUtil
-from src.utils.stream_mes_util import StreamUtil
-from src.entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
+from ..utils.queue_util import QueueUtil
+from ..utils.stream_mes_util import StreamUtil
+from ..entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -58,7 +58,7 @@ class ProposalAgent:
         # 设置Tavily API密钥
         # os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool]
+        self.tools = [search_arxiv_papers_tool, search_web_content_tool, search_crossref_papers_tool, summarize_pdf, generate_gantt_chart_tool, search_google_scholar_site_tool]
         self.tools_description = self.load_tools_description()
         self.agent_with_tools = create_react_agent(self.llm, self.tools)
         
@@ -486,6 +486,7 @@ class ProposalAgent:
                 "search_web_content": search_web_content_tool,
                 "search_crossref_papers": search_crossref_papers_tool,
                 "summarize_pdf": summarize_pdf,
+                "search_google_scholar_site": search_google_scholar_site_tool,
             }.get(action_name)
 
             if tool_to_call:
@@ -493,7 +494,7 @@ class ProposalAgent:
                 # 特定于工具的状态更新
                 if action_name == "search_arxiv_papers":
                     state["arxiv_papers"].extend(result or [])
-                elif action_name in ["search_web_content", "search_crossref_papers"]:
+                elif action_name in ["search_web_content", "search_crossref_papers", "search_google_scholar_site"]:
                     state["web_search_results"].extend(result or [])
                 elif action_name == "summarize_pdf" and result and "summary" in result:
                     for paper in state["arxiv_papers"]:
@@ -999,7 +1000,9 @@ class ProposalAgent:
         research_field = state["research_field"]
         introduction_content = state.get("introduction", "")
         literature_review_content = state.get("literature_review", "")
-        research_design_content = state.get("research_design", "")        # 为结论部分也添加文献引用能力
+        research_design_content = state.get("research_design", "")
+
+        # 为结论部分也添加文献引用能力
         literature_summary = self.get_literature_summary_with_refs(state)
         
         # 结论部分的引用指导
@@ -1164,10 +1167,6 @@ class ProposalAgent:
         final_references = state.get("final_references", "无参考文献")
         gantt_chart = state.get("gantt_chart", "")  # 获取甘特图
 
-        research_plan = state.get("research_plan", "无初始研究计划")
-        execution_memory = state.get("execution_memory", [])
-        reference_list = state.get("reference_list", [])
-
         # 检查并恢复甘特图 - 使用多重检查和恢复机制
         gantt_chart = state.get("gantt_chart", "")
         gantt_backup = state.get("gantt_chart_backup", "")
@@ -1175,27 +1174,12 @@ class ProposalAgent:
         # 增强调试信息
         logging.info(f"生成最终报告时，获取到的gantt_chart长度: {len(gantt_chart)} 字符")
         logging.info(f"生成最终报告时，获取到的gantt_chart_backup长度: {len(gantt_backup)} 字符")
-        logging.info(f"当前state中所有键: {list(state.keys())}")
         
         # 尝试从备份恢复甘特图
         if not gantt_chart and gantt_backup:
             gantt_chart = gantt_backup
             state["gantt_chart"] = gantt_backup
             logging.warning("⚠️ 最终报告生成时主甘特图为空，已从备份恢复")
-        
-        # 检查状态中是否真的存在甘特图
-        if "gantt_chart" in state:
-            actual_gantt = state["gantt_chart"]
-            logging.info(f"state['gantt_chart']的实际长度: {len(actual_gantt)} 字符")
-            if actual_gantt:
-                logging.info(f"实际甘特图内容前200字符: {actual_gantt[:200]}...")
-            else:
-                logging.warning("⚠️ state['gantt_chart']存在但为空")
-        else:
-            logging.error("❌ state中没有'gantt_chart'键")
-            # 尝试创建
-            state["gantt_chart"] = gantt_backup if gantt_backup else ""
-            logging.info("🔧 已重新创建gantt_chart键")
 
         # 创建output文件夹
         output_dir = Path(__file__).parent.parent.parent.parent / "output"
@@ -1204,9 +1188,6 @@ class ProposalAgent:
 
         # 用uuid替换时间戳
         proposal_id = state["proposal_id"]
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # safe_research_field = "".join(
-        #     c for c in research_field if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')[:30]
         report_filename = f"Research_Proposal_{proposal_id}.md"
         references_filename = f"References_{proposal_id}.json"
         report_filepath = os.path.join(output_dir, report_filename)
@@ -1223,14 +1204,8 @@ class ProposalAgent:
 
         # report_content += "## 1. 引言\n\n"
         report_content += f"{introduction}\n\n"
-
-        # report_content += "## 2. 文献综述\n\n"
         report_content += f"{literature_review}\n\n"
-
-        # report_content += "## 3. 研究设计与方法\n\n"
         report_content += f"{research_design}\n\n"
-
-        # report_content += "## 4. 结论与展望\n\n" # 结论部分已包含时间轴和预期成果
         report_content += f"{conclusion}\n\n"
 
         # 添加甘特图部分 - 使用恢复后的甘特图
@@ -1241,34 +1216,8 @@ class ProposalAgent:
             logging.info("✅ 甘特图已添加到最终报告")
         else:
             logging.warning("⚠️ 甘特图为空或无效，未添加到报告中")
-            logging.warning(f"甘特图值类型: {type(final_gantt_chart)}, 内容: '{final_gantt_chart}'")
-            logging.warning(f"备份甘特图值类型: {type(gantt_backup)}, 内容: '{gantt_backup}'")
 
         report_content += f"{final_references}\n\n"  # 参考文献部分自带 "## 参考文献" 标题
-
-        report_content += "---\n"
-        report_content += "## 附录：过程资料\n\n"
-
-        report_content += "### A.1 初始研究计划\n\n"
-        report_content += "```markdown\n"
-        report_content += f"{research_plan}\n"
-        report_content += "```\n\n"
-
-        report_content += "### A.2 执行步骤记录\n\n"
-        if execution_memory:
-            for i, step_memory in enumerate(execution_memory):
-                action = step_memory.get("action", "未知动作")
-                desc = step_memory.get("description", "无描述")
-                res = step_memory.get("result", "无结果")
-                success_status = "成功" if step_memory.get("success") else "失败"
-                report_content += f"**步骤 {i + 1}: {desc}** ({action})\n"
-                report_content += f"- 状态: {success_status}\n"
-                report_content += f"- 结果摘要: {str(res)[:150]}...\n\n"
-        else:
-            report_content += "无执行记录。\n\n"
-
-        report_content += "### A.3 收集的文献与信息摘要\n\n"
-        report_content += self.get_literature_summary_with_refs(state) + "\n\n"
 
         state["global_step_num"] += 1
         start_time = time.time()
@@ -1287,7 +1236,7 @@ class ProposalAgent:
             # 保存参考文献列表为JSON文件
             try:
                 with open(references_filepath, 'w', encoding='utf-8') as ref_file:
-                    json.dump(reference_list, ref_file, ensure_ascii=False, indent=2)
+                    json.dump(state["reference_list"], ref_file, ensure_ascii=False, indent=2)
                 logging.info(f"✅ 参考文献列表已保存到: {references_filepath}")
             except Exception as ref_e:
                 logging.error(f"❌ 保存参考文献列表失败: {ref_e}")
@@ -1958,7 +1907,7 @@ class ProposalAgent:
             "gantt_chart": "",  # 确保甘特图字段正确初始化
             "gantt_chart_backup": "",  # 添加备份字段
             "final_report_markdown": "", # 初始化最终报告字段
-            "global_step_num": 0 # 初始化全局步骤计数器
+            "global_step_num": 0, # 初始化全局步骤计数器
         }
 
         logging.info(f"🚀 开始处理研究问题: '{research_field}' (任务ID: {proposal_id})")
@@ -2166,7 +2115,7 @@ class ProposalAgent:
 
             response = None  # 初始化 response 变量
 
-            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef":
+            if reference["type"] == "ArXiv" or reference["type"] == "CrossRef" or reference["type"] == "Google Scholar":
                 # 定义用户提示给LLM
                 user_prompt = f"""Query: {research_field}
     Document: {reference.get('summary', '')}
@@ -2262,3 +2211,39 @@ class ProposalAgent:
                 content="\n\n✅ 处理完成，共耗时 %.2fs" % (time.time() - start_time))
             )
             return reference_list
+
+    def execute_action(self, action_name: str, action_input: Dict[str, Any], state: ProposalState) -> Tuple[Dict[str, Any], ProposalState]:
+        """执行动作"""
+        try:
+            # 获取对应的工具函数
+            tool_func = {
+                "search_arxiv_papers": search_arxiv_papers_tool,
+                "search_web_content": search_web_content_tool,
+                "search_crossref_papers": search_crossref_papers_tool,
+                "summarize_pdf": summarize_pdf,
+                "generate_gantt_chart": generate_gantt_chart_tool,
+                "search_google_scholar": search_google_scholar_site_tool,  # 修改工具名称
+            }.get(action_name)
+
+            if not tool_func:
+                raise ValueError(f"未知或不支持的 action: {action_name}")
+
+            # 执行工具函数
+            result = tool_func(**action_input)
+
+            # 更新状态
+            if action_name == "search_arxiv_papers":
+                state["arxiv_papers"].extend(result or [])
+            elif action_name in ["search_web_content", "search_crossref_papers", "search_google_scholar"]:  # 更新工具名称
+                state["web_search_results"].extend(result or [])
+            elif action_name == "summarize_pdf" and result and "summary" in result:
+                state["pdf_summaries"].append(result)
+            elif action_name == "generate_gantt_chart" and result:
+                state["gantt_chart"] = result
+                state["gantt_chart_backup"] = result  # 保存备份
+
+            return result, state
+
+        except Exception as e:
+            logging.error(f"执行动作 {action_name} 失败: {str(e)}")
+            return {"error": str(e)}, state

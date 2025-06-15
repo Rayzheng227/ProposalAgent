@@ -14,8 +14,11 @@ from langchain_community.tools import TavilySearchResults
 from crossref.restful import Works
 from langchain_core.messages import HumanMessage, SystemMessage
 import fitz
+from .rag import generate_search_queries
 from langchain_openai import ChatOpenAI
-import src.agent.rag as rag
+import datetime
+import time
+import scholarly
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 load_dotenv()
@@ -39,7 +42,7 @@ def search_arxiv_papers_tool(query: str, max_results: int = 10, Download: bool =
     logging.info(f"在arxiv上搜索领域为:{query}")
 
     try:
-        content = rag.generate_search_queries(query)
+        content = generate_search_queries(query)
         queries = [line.strip() for line in content.split('\n') if line.strip()]
         logging.info(f"在arxiv上搜索关键词为:{queries}")
         papers = []
@@ -190,7 +193,7 @@ def search_web_content_tool(query: str) -> List[Dict]:
         搜索结果列表
     """
     logging.info(f"正在网络搜索领域:{query}")
-    queries = rag.generate_search_queries(query)
+    queries = generate_search_queries(query)
     logging.info(f"正在网络搜索关键词:{queries}")
 
     try:
@@ -221,7 +224,7 @@ def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
         包含论文信息的字典列表
     """
     logging.info(f"在crossref上搜索领域:{query}")
-    queries = rag.generate_search_queries(query)
+    queries = generate_search_queries(query)
     logging.info(f"在crossref上搜索领域:{queries}")
 
     try:
@@ -379,6 +382,7 @@ def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -
     
     try:
         # 构造甘特图生成提示
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
         gantt_prompt = f"""
         你是一个项目管理专家，需要根据提供的研究时间线内容生成Mermaid格式的甘特图。
 
@@ -387,11 +391,13 @@ def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -
         **时间线内容：**
         {timeline_content}
         
+        **现在的时间是：** {current_date}
+
         **要求：**
         1. 仔细分析时间线内容，提取关键的阶段、任务和时间节点
         2. 将任务按逻辑分组为不同的section（如：文献调研、系统设计、实验评估等）
         3. 生成标准的Mermaid甘特图语法
-        4. 使用合理的日期格式（YYYY-MM-DD）
+        4. 使用合理的日期格式（YYYY-MM-DD），以当前时间作为开始时间
         5. 根据任务的重要性和依赖关系设置状态（done, active, 或不设置）
         6. 确保时间安排合理，避免任务重叠冲突
         
@@ -479,3 +485,90 @@ def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -
             "status": "error", 
             "message": f"甘特图生成失败: {str(e)}"
         }
+
+@tool
+def search_google_scholar_site_tool(query: str, max_results: int = 5) -> List[Dict]:
+    """通过 Google Scholar site 搜索（默认锁定在 ieeexplore.ieee.org）并返回论文列表
+
+    Args:
+        query:        检索关键词
+        max_results:  最多返回条目数
+
+    Returns:
+        List[Dict]: 每条包含 title, authors, year, url, abstract, citations, journal, doi
+    """
+    full_query = f"site:ieeexplore.ieee.org {query}"
+    logging.info(f"在 Google Scholar 上执行 site 搜索: {full_query}")
+    try:
+        search_gen = scholarly.search_pubs(full_query)
+        results = []
+        for i, pub in enumerate(search_gen):
+            if i >= max_results:
+                break
+                
+            # 获取完整论文信息
+            try:
+                pub = scholarly.fill(pub)
+                bib = pub.bib
+                
+                # 提取摘要
+                abstract = ""
+                if hasattr(pub, 'abstract'):
+                    abstract = pub.abstract
+                elif 'abstract' in bib:
+                    abstract = bib['abstract']
+                
+                # 提取引用数
+                citations = 0
+                if hasattr(pub, 'num_citations'):
+                    citations = pub.num_citations
+                
+                # 提取期刊信息
+                journal = ""
+                if 'journal' in bib:
+                    journal = bib['journal']
+                elif 'publisher' in bib:
+                    journal = bib['publisher']
+                
+                # 提取DOI
+                doi = ""
+                if 'doi' in bib:
+                    doi = bib['doi']
+                
+                results.append({
+                    "title": bib.get("title", ""),
+                    "authors": bib.get("author", ""),
+                    "year": bib.get("year", ""),
+                    "url": bib.get("url", ""),
+                    "abstract": abstract,
+                    "citations": citations,
+                    "journal": journal,
+                    "doi": doi,
+                    "keywords": bib.get("keywords", ""),
+                    "eprint": bib.get("eprint", ""),
+                    "venue": bib.get("venue", ""),
+                    "volume": bib.get("volume", ""),
+                    "number": bib.get("number", ""),
+                    "pages": bib.get("pages", "")
+                })
+                
+                # 添加延迟以避免被封禁
+                time.sleep(2)
+                
+            except Exception as e:
+                logging.warning(f"获取论文详细信息失败: {str(e)}")
+                # 如果获取详细信息失败，至少返回基本信息
+                bib = pub.bib
+                results.append({
+                    "title": bib.get("title", ""),
+                    "authors": bib.get("author", ""),
+                    "year": bib.get("year", ""),
+                    "url": bib.get("url", ""),
+                    "error": f"获取详细信息失败: {str(e)}"
+                })
+        
+        return results
+
+    except Exception as e:
+        logging.error(f"Google Scholar 搜索失败: {e}")
+        return [{"error": f"Google Scholar 搜索失败: {e}"}]

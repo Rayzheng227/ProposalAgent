@@ -108,5 +108,27 @@
         "required": ["timeline_content"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_google_scholar_site_tool",
+      "description": "通过Google Scholar搜索IEEE论文，获取详细的论文信息，包括摘要、引用数、期刊信息等",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词或主题"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "最大返回结果数量",
+            "default": 5
+          }
+        },
+        "required": ["query"]
+      }
+    }
   }
 ]

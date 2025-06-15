@@ -70,6 +70,9 @@ Each step should be:
 - `search_web_content`: Search web content using Tavily
 - `search_crossref_papers`: Search academic papers via CrossRef
 - `summarize_pdf`: Summarize downloaded PDF files (use this for important papers after downloading)
+- `search_google_scholar_site`: Search academic papers via Google Scholar site
+
+You cannot use `generate_gantt_chart` tool while making the execution plan.
 
 **Strategy for PDF Analysis:**
 1. First search and download relevant papers using arxiv or crossref tools

@@ -17,7 +17,7 @@ base_url = os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compa
 
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # 输出到控制台
@@ -105,10 +105,10 @@ class ProposalExporter:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                     md_files[specific_file] = content
-                print(f"✓ 读取指定文件: {file_path}")
+                logging.info(f"✓ 读取指定文件: {file_path}")
                 selected_md_filepath = file_path
             else:
-                print(f"⚠️ 指定文件不存在: {file_path}")
+                logging.warning(f"⚠️ 指定文件不存在: {file_path}")
         else:
             # 自动选择最新文件
             pattern = os.path.join(self.markdown_source_dir, "Research_Proposal_*.md") # More specific pattern
@@ -123,11 +123,11 @@ class ProposalExporter:
                     content = f.read()
                     md_files[filename] = content
                 
-                print(f"✓ 自动选择最新文件: {latest_file}")
-                print(f"  文件修改时间: {datetime.fromtimestamp(os.path.getmtime(latest_file))}")
+                logging.info(f"✓ 自动选择最新文件: {latest_file}")
+                logging.debug(f"  文件修改时间: {datetime.fromtimestamp(os.path.getmtime(latest_file))}")
                 selected_md_filepath = latest_file
             else:
-                print(f"⚠️ 在目录 '{self.markdown_source_dir}' 中未找到任何符合 'Research_Proposal_*.md' 格式的Markdown文件")
+                logging.warning(f"⚠️ 在目录 '{self.markdown_source_dir}' 中未找到任何符合 'Research_Proposal_*.md' 格式的Markdown文件")
 
         if selected_md_filepath:
             self._load_references_json(selected_md_filepath)
@@ -151,18 +151,18 @@ class ProposalExporter:
                 try:
                     with open(ref_json_filepath, 'r', encoding='utf-8') as f:
                         self.references_data = json.load(f)
-                    print(f"✓ 成功加载参考文献文件: {ref_json_filepath}")
+                    logging.info(f"✓ 成功加载参考文献文件: {ref_json_filepath}")
                 except json.JSONDecodeError:
-                    print(f"⚠️ 解析参考文献JSON文件失败: {ref_json_filepath}")
+                    logging.warning(f"⚠️ 解析参考文献JSON文件失败: {ref_json_filepath}")
                     self.references_data = None
                 except Exception as e:
-                    print(f"⚠️ 读取参考文献文件时出错: {ref_json_filepath}, Error: {e}")
+                    logging.error(f"⚠️ 读取参考文献文件时出错: {ref_json_filepath}, Error: {e}")
                     self.references_data = None
             else:
-                print(f"ℹ️ 未找到对应的参考文献文件: {ref_json_filepath}")
+                logging.info(f"ℹ️ 未找到对应的参考文献文件: {ref_json_filepath}")
                 self.references_data = None
         else:
-            print(f"ℹ️ Markdown文件名 '{md_basename}' 不符合预期的 'Research_Proposal_' 前缀，跳过加载参考文献。")
+            logging.info(f"ℹ️ Markdown文件名 '{md_basename}' 不符合预期的 'Research_Proposal_' 前缀，跳过加载参考文献。")
             self.references_data = None
 
     def _escape_latex(self, text: str) -> str:
@@ -438,7 +438,7 @@ class ProposalExporter:
             extracted_title = re.sub(r'^研究计划书[：:]\s*', '', extracted_title)
             return extracted_title
         except Exception as e:
-            print(f"提取标题失败: {e}")
+            logging.error(f"提取标题失败: {e}")
             return "人工智能在医疗领域的应用研究"
 
     def convert_md_to_latex(self, markdown_content: str, section_type: str) -> str:
@@ -473,6 +473,25 @@ class ProposalExporter:
    - 不要添加任何额外的内容
    - 最多返回2000字的内容
    - 直接返回LaTeX内容，不要使用```latex```或其他代码块标记包裹
+   - 确保清理所有Markdown格式符号，包括：
+     * 删除所有 **** 加粗符号
+     * 删除所有 ** 加粗符号
+     * 删除所有 * 斜体符号
+     * 删除所有 # 标题符号
+     * 删除所有 - 列表符号
+     * 删除所有 > 引用符号
+     * 删除所有 ` 代码块符号
+     * 删除所有 ``` 代码块符号
+     * 删除所有 [] 链接符号
+     * 删除所有 () 链接符号
+     * 删除所有 | 表格符号
+     * 删除所有 --- 分隔线符号
+   - 特别要求：
+     * 删除所有中文数字编号（如"一、"、"二、"等）
+     * 删除所有阿拉伯数字编号（如"1."、"2."等）
+     * 删除所有带括号的编号（如"（一）"、"（1）"等）
+     * 删除所有带点的编号（如"1.1"、"1.2"等）
+     * 删除所有带顿号的编号（如"一、"、"二、"等）
 
 Markdown内容：
 {truncated_content}
@@ -484,7 +503,7 @@ Markdown内容：
             from langchain_core.messages import HumanMessage, SystemMessage
             
             response = self.llm.invoke([
-                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请严格按照要求转换格式，保持原文内容不变。对于图片相关的LaTeX代码，请保持原样。"),
+                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请严格按照要求转换格式，保持原文内容不变。对于图片相关的LaTeX代码，请保持原样。确保清理所有Markdown格式符号和编号。"),
                 HumanMessage(content=prompt)
             ])
             
@@ -501,9 +520,28 @@ Markdown内容：
             # 3. 确保段落之间有适当的空行
             latex_content = re.sub(r'\n{3,}', '\n\n', latex_content)
             
+            # 4. 清理所有Markdown格式符号
+            latex_content = re.sub(r'\*\*\*(.*?)\*\*\*', r'\1', latex_content)  # 删除 *** 加粗符号
+            latex_content = re.sub(r'\*\*(.*?)\*\*', r'\1', latex_content)      # 删除 ** 加粗符号
+            latex_content = re.sub(r'\*(.*?)\*', r'\1', latex_content)          # 删除 * 斜体符号
+            latex_content = re.sub(r'^\s*[-*+]\s+', '', latex_content, flags=re.MULTILINE)  # 删除列表符号
+            latex_content = re.sub(r'^\s*>\s+', '', latex_content, flags=re.MULTILINE)      # 删除引用符号
+            latex_content = re.sub(r'`(.*?)`', r'\1', latex_content)            # 删除 ` 代码块符号
+            latex_content = re.sub(r'```.*?```', '', latex_content, flags=re.DOTALL)  # 删除 ``` 代码块符号
+            latex_content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', latex_content)   # 删除链接符号
+            latex_content = re.sub(r'\|.*?\|', '', latex_content)               # 删除表格符号
+            latex_content = re.sub(r'^\s*---+\s*$', '', latex_content, flags=re.MULTILINE)  # 删除分隔线符号
+            
+            # 5. 清理所有编号
+            latex_content = re.sub(r'^[一二三四五六七八九十]+[、.．。]', '', latex_content, flags=re.MULTILINE)  # 删除中文数字编号
+            latex_content = re.sub(r'^[（(][一二三四五六七八九十]+[）)]', '', latex_content, flags=re.MULTILINE)  # 删除带括号的中文数字编号
+            latex_content = re.sub(r'^\d+[、.．。]', '', latex_content, flags=re.MULTILINE)  # 删除阿拉伯数字编号
+            latex_content = re.sub(r'^[（(]\d+[）)]', '', latex_content, flags=re.MULTILINE)  # 删除带括号的阿拉伯数字编号
+            latex_content = re.sub(r'^\d+\.\d+[、.．。]', '', latex_content, flags=re.MULTILINE)  # 删除带点的编号
+            
             return latex_content.strip()
         except Exception as e:
-            print(f"转换失败: {e}")
+            logging.error(f"转换失败: {e}")
             # 如果转换失败，返回一个基本的LaTeX表示
             escaped_markdown = self._escape_latex(markdown_content)
             return f"% ---- Fallback for section: {section_type} ----\n{escaped_markdown}\n% ---- End fallback ----"
@@ -520,9 +558,16 @@ Markdown内容：
 """
         if section_name == "总结":
             prompt_text += """
-特别注意：当提取"总结"部分时，请确保内容主要对应研究的最终结论、成果总结、未来展望，或者明确标记为"第四部分"、"结论与展望"等末尾章节。
-如果"总结"内容紧跟在"研究内容"或"第三部分"之后，请准确识别"总结"部分的起始点，避免包含前面章节的详细主体内容。
-**重要：如果"总结"部分原文包含如 '# 研究时间线', '# 预期成果', '# 最终总结' 等子标题，请务必保持这些子标题及其内容的原始顺序和Markdown格式，不要修改、合并或省略它们。你需要完整地提取这些子部分作为整个"总结"章节的内容。**
+特别注意：
+1. 当提取"总结"部分时，请确保内容主要对应研究的最终结论、成果总结、未来展望。
+2. 只提取明确标记为"总结"、"结论"、"展望"、"最终总结"等末尾章节的内容。
+3. 不要包含研究内容、研究方法等主体部分的详细内容。
+4. 如果原文包含以下子标题，请按以下优先级提取：
+   - "最终总结"或"结论"（最高优先级）
+   - "研究展望"或"未来展望"
+   - "预期成果"
+5. 如果发现内容与研究内容部分重复，请只保留总结性的表述。
+6. 确保提取的内容是总结性的，而不是详细的研究过程描述。
 """
         elif section_name == "研究内容":
             prompt_text += """
@@ -544,7 +589,6 @@ Markdown内容：
 3. 如果有多个相关段落，都要包含
 4. 最多返回1000字的内容
 5. **避免重复的章节编号，如果原文中有数字编号，请在提取时清理**
-**6. (针对研究内容部分) 如果原文的总结部分包含 '# 研究时间线', '# 预期成果'等子标题，请确保它们及其内容被完整且按原样提取到研究内容部分，不要改变其结构或顺序。**
 
 文本内容：
 {truncated_content}
@@ -564,7 +608,7 @@ Markdown内容：
             
             return extracted_content
         except Exception as e:
-            print(f"提取{section_name}内容失败: {e}")
+            logging.error(f"提取{section_name}内容失败: {e}")
             # 使用简单的文本匹配作为备用方案
             return self.simple_section_extraction(content, section_name)
 
@@ -659,35 +703,35 @@ Markdown内容：
         
         # 合并所有Markdown内容
         all_content = '\n\n'.join(md_files.values())
-        print(f"总内容长度: {len(all_content)} 字符")
+        logging.info(f"总内容长度: {len(all_content)} 字符")
         
         # 提取标题
         title_content = self.extract_title(all_content)
         if title_content:
             content_map['title'] = title_content
-            print(f"✓ 提取标题: {title_content}")
+            logging.info(f"✓ 提取标题: {title_content}")
         
         # 使用大模型分析和提取内容
         for section in ['引言', '文献综述', '研究内容', '总结']:
-            print(f"正在提取 {section} 内容...")
+            logging.info(f"正在提取 {section} 内容...")
             section_content = self.extract_section_content(all_content, section)
             if section_content:
-                print(f"✓ 提取到 {section} 内容，长度: {len(section_content)} 字符")
-                print(f"正在转换 {section} 为LaTeX格式...")
+                logging.info(f"✓ 提取到 {section} 内容，长度: {len(section_content)} 字符")
+                logging.info(f"正在转换 {section} 为LaTeX格式...")
                 latex_content = self.convert_md_to_latex(section_content, section)
                 content_map[section] = latex_content
-                print(f"✓ {section} 转换完成")
+                logging.info(f"✓ {section} 转换完成")
             else:
-                print(f"⚠️ 未找到 {section} 相关内容")
+                logging.warning(f"⚠️ 未找到 {section} 相关内容")
         
         # Generate LaTeX bibliography
-        print("正在生成参考文献部分...")
+        logging.info("正在生成参考文献部分...")
         bibliography_latex = self._generate_latex_bibliography()
         if bibliography_latex:
             content_map['参考文献内容'] = bibliography_latex
-            print(f"✓ 参考文献部分生成完成, 长度: {len(bibliography_latex)} 字符")
+            logging.info(f"✓ 参考文献部分生成完成, 长度: {len(bibliography_latex)} 字符")
         else:
-            print("ℹ️ 未生成参考文献部分 (无数据或错误)")
+            logging.info("ℹ️ 未生成参考文献部分 (无数据或错误)")
             
         return content_map
     
@@ -867,40 +911,32 @@ Markdown内容：
         filled_template = filled_template.replace('[总结]', content_map.get('总结', ''))
         filled_template = filled_template.replace('[参考文献内容]', content_map.get('参考文献内容', ''))
         
-        # 处理Mermaid图表，只插入第一个gantt类型的图片代码
-        processed_mermaid_content = self._process_all_mermaid_diagrams(md_content_for_mermaid, report_filename_base)
-        gantt_found = True
+        # 查找第一个gantt类型的图片
         gantt_figure_code = ''
-        for match in re.finditer(r'```mermaid\s*([\s\S]+?)```', md_content_for_mermaid):
-            mermaid_code = match.group(1).strip()
-            if 'gantt' in mermaid_code.lower():
-                gantt_found = True
+        image_file_stem = f"{report_filename_base}_mermaid_0"
+        
+        # 检查图片目录中是否存在对应的图片文件
+        for fname in os.listdir(self.final_mermaid_images_dir):
+            if fname.startswith(image_file_stem) and fname.endswith('.png'):
+                # 构建LaTeX中的图片路径（相对于main.tex）
+                latex_image_path = os.path.join("figures", "mermaid_images", fname)
+                latex_image_path = latex_image_path.replace("\\", "/")  # 确保使用正斜杠
+
+                # 生成LaTeX图片代码
+                gantt_figure_code = (
+                    f"\n\n\\begin{{figure}}[htbp]\n"
+                    f"\\centering\n"
+                    f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
+                    f"\\caption{{项目时间规划甘特图}}\n"
+                    f"\\label{{fig:gantt}}\n"
+                    f"\\end{{figure}}\n\n"
+                )
+                logging.info(f'✅ 使用已生成的甘特图图片: {fname}')
                 break
 
-        if gantt_found:
-            # 在图片目录下找第一个 _mermaid_ 且 .png 结尾的图片
-            for fname in sorted(os.listdir(os.path.join(self.output_dir, "figures", "mermaid_images"))):
-                logging.info(f'fname: {fname}')
-                if '_mermaid_' in fname and fname.endswith('.png'):
-                    latex_image_path = os.path.join("figures", "mermaid_images", fname).replace("\\", "/")
-                    caption_text = "Gantt 甘特图"
-                    label_text = f"fig:{fname.replace('.png','')}"
-                    gantt_figure_code = (
-                        f"\n\n\\begin{{figure}}[htbp]\n"
-                        f"\\centering\n"
-                        f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
-                        f"\\caption{{{caption_text}}}\n"
-                        f"\\label{{{label_text}}}\n"
-                        f"\\end{{figure}}\n\n"
-                    )
-                    logging.info(f'找到甘特图图片: {fname}')
-                    break
-        else:
-            logging.info('未找到 gantt 代码块')
-
-        filled_template = filled_template.replace('%MERMAID_IMAGE%', gantt_figure_code)
+        # 替换模板中的占位符
+        # filled_template = filled_template.replace('%MERMAID_IMAGE%', gantt_figure_code)
         filled_template = filled_template.replace('[Mermaid Image]', gantt_figure_code)
-        logging.info(f"甘特图代码: {gantt_figure_code}")
         
         return filled_template
     
@@ -922,21 +958,21 @@ Markdown内容：
         tex_full_path = os.path.join(output_dir, tex_basename)
 
 
-        print(f"正在使用xelatex编译: {tex_full_path}")
+        logging.info(f"正在使用xelatex编译: {tex_full_path}")
 
         # 复制 .cls 文件
         cls_source_file = os.path.join(self.exporter_dir, "phdproposal.cls")
         if not os.path.exists(cls_source_file):
-            print(f"❌ 找不到类文件: {cls_source_file}")
+            logging.error(f"❌ 找不到类文件: {cls_source_file}")
             return False
         
         import shutil
         target_cls_file = os.path.join(output_dir, "phdproposal.cls")
         try:
             shutil.copy2(cls_source_file, target_cls_file)
-            print(f"✓ 已复制类文件到: {target_cls_file}")
+            logging.info(f"✓ 已复制类文件到: {target_cls_file}")
         except Exception as e:
-            print(f"❌ 复制类文件失败: {e}")
+            logging.error(f"❌ 复制类文件失败: {e}")
             return False
 
         # 复制 Logo 文件和 figures 目录
@@ -948,19 +984,19 @@ Markdown内容：
             os.makedirs(target_figures_dir, exist_ok=True)
             try:
                 shutil.copy2(logo_source_file, target_logo_file)
-                print(f"✓ 已复制Logo文件到: {target_logo_file}")
+                logging.info(f"✓ 已复制Logo文件到: {target_logo_file}")
             except Exception as e:
-                print(f"❌ 复制Logo文件失败: {e}")
+                logging.error(f"❌ 复制Logo文件失败: {e}")
                 # 根据需求决定是否在此处返回False，如果Logo是可选的，可以继续
         else:
-            print(f"⚠️ 未找到Logo文件: {logo_source_file}，将不包含Logo。")
+            logging.warning(f"⚠️ 未找到Logo文件: {logo_source_file}，将不包含Logo。")
 
 
         try:
             original_cwd = os.getcwd()
             os.chdir(output_dir) # 切换到编译目录
-            print(f"当前工作目录: {os.getcwd()}")
-            print(f"编译文件: {tex_basename}") # 应该只编译文件名
+            logging.debug(f"当前工作目录: {os.getcwd()}")
+            logging.debug(f"编译文件: {tex_basename}") # 应该只编译文件名
 
             result1 = subprocess.run([
                 'xelatex',
@@ -970,17 +1006,17 @@ Markdown内容：
             ], capture_output=True, text=True, timeout=120)
 
             if result1.returncode != 0:
-                print(f"❌ 第一次xelatex编译失败:")
-                print(f"标准输出: {result1.stdout}")
-                print(f"错误输出: {result1.stderr}")
+                logging.error(f"❌ 第一次xelatex编译失败:")
+                logging.error(f"标准输出: {result1.stdout}")
+                logging.error(f"错误输出: {result1.stderr}")
                 log_file = f"{tex_name_without_ext}.log"
                 if os.path.exists(log_file):
                     with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                         log_content = f.read()
-                        print(f"Log文件内容:\n{log_content[-1000:]}")
+                        logging.error(f"Log文件内容:\n{log_content[-1000:]}")
                 return False
 
-            print("正在进行第二次编译（处理交叉引用）...")
+            logging.info("正在进行第二次编译（处理交叉引用）...")
             result2 = subprocess.run([
                 'xelatex',
                 '-interaction=nonstopmode',
@@ -989,36 +1025,36 @@ Markdown内容：
             ], capture_output=True, text=True, timeout=120)
 
             if result2.returncode != 0:
-                print(f"❌ 第二次xelatex编译失败:")
-                print(f"错误输出: {result2.stderr}")
+                logging.error(f"❌ 第二次xelatex编译失败:")
+                logging.error(f"错误输出: {result2.stderr}")
                 return False
 
             pdf_filename = f"{tex_name_without_ext}.pdf"
             if os.path.exists(pdf_filename):
-                print(f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}") # 使用os.getcwd()获取绝对路径
+                logging.info(f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}") # 使用os.getcwd()获取绝对路径
                 self._cleanup_temp_files(tex_name_without_ext)
                 try:
                     os.remove("phdproposal.cls") # 清理复制的cls文件
                     if os.path.exists(target_figures_dir): # 清理复制的figures目录
                         shutil.rmtree(target_figures_dir)
-                    print("✓ 已清理临时类文件和Logo文件")
+                    logging.info("✓ 已清理临时类文件和Logo文件")
                 except Exception as e:
-                    print(f"⚠️ 清理临时文件失败: {e}")
+                    logging.warning(f"⚠️ 清理临时文件失败: {e}")
                 return True
             else:
-                print("❌ PDF文件未能生成")
+                logging.error("❌ PDF文件未能生成")
                 return False
 
         except subprocess.TimeoutExpired:
-            print("❌ xelatex编译超时")
+            logging.error("❌ xelatex编译超时")
             return False
         except FileNotFoundError:
-            print("❌ 未找到xelatex命令，请确保已安装LaTeX环境")
-            print("Ubuntu/Debian: sudo apt-get install texlive-full")
-            print("CentOS/RHEL: sudo yum install texlive-scheme-full")
+            logging.error("❌ 未找到xelatex命令，请确保已安装LaTeX环境")
+            logging.info("Ubuntu/Debian: sudo apt-get install texlive-full")
+            logging.info("CentOS/RHEL: sudo yum install texlive-scheme-full")
             return False
         except Exception as e:
-            print(f"❌ 编译过程中发生错误: {e}")
+            logging.error(f"❌ 编译过程中发生错误: {e}")
             return False
         finally:
             os.chdir(original_cwd)
@@ -1033,7 +1069,7 @@ Markdown内容：
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    print(f"清理临时文件失败 {temp_file}: {e}")
+                    logging.warning(f"清理临时文件失败 {temp_file}: {e}")
     
     def export_proposal(self, output_filename: str = "generated_proposal.tex", compile_pdf: bool = True, specific_file: str = None):
         """
@@ -1042,7 +1078,7 @@ Markdown内容：
         :param compile_pdf: 是否自动编译生成PDF
         :param specific_file: 指定要处理的Markdown文件名 (在 self.markdown_source_dir 中查找)
         """
-        print("开始导出研究计划...")
+        logging.info("开始导出研究计划...")
         
         # 确保TeX/PDF输出目录存在 (e.g., exporter/pdf_output)
         os.makedirs(self.output_dir, exist_ok=True)
@@ -1050,27 +1086,27 @@ Markdown内容：
         # 读取模板 (exporter/main.tex)
         try:
             template = self.read_template()
-            print("✓ 已读取模板文件")
+            logging.info("✓ 已读取模板文件")
         except Exception as e:
-            print(f"❌ 读取模板文件失败: {e}")
+            logging.error(f"❌ 读取模板文件失败: {e}")
             return None, None # Return two Nones for tex_file, pdf_file
         
         # 读取Markdown文件 (从 self.markdown_source_dir)
         md_files = self.read_markdown_files(specific_file)
         if not md_files:
-            print(f"警告: 未能从 '{self.markdown_source_dir}' 读取到Markdown文件。")
+            logging.warning(f"警告: 未能从 '{self.markdown_source_dir}' 读取到Markdown文件。")
             return None, None
-        print(f"✓ 已读取 {len(md_files)} 个Markdown文件")
+        logging.info(f"✓ 已读取 {len(md_files)} 个Markdown文件")
         
         # 合并所有Markdown内容，用于Mermaid提取和内容分析
         full_md_content = "\n\n".join(md_files.values())
         
-        print("正在提取和转换内容...")
+        logging.info("正在提取和转换内容...")
         try:
             content_map = self.extract_content_by_type(md_files) # extract_content_by_type uses md_files dict
-            print("✓ 内容提取和转换完成")
+            logging.info("✓ 内容提取和转换完成")
         except Exception as e:
-            print(f"❌ 内容提取失败: {e}")
+            logging.error(f"❌ 内容提取失败: {e}")
             return None, None
         
         # 获取报告文件名基础，用于Mermaid图片命名
@@ -1090,22 +1126,22 @@ Markdown内容：
         try:
             with open(output_filepath, 'w', encoding='utf-8') as f:
                 f.write(filled_template)
-            print(f"✓ 研究计划已导出到: {output_filepath}")
+            logging.info(f"✓ 研究计划已导出到: {output_filepath}")
         except Exception as e:
-            print(f"❌ 保存文件失败: {e}")
+            logging.error(f"❌ 保存文件失败: {e}")
             return output_filepath, None # Return tex_file path even if PDF fails later
         
         pdf_path = None
         if compile_pdf:
-            print("\n开始编译PDF...")
+            logging.info("\n开始编译PDF...")
             success = self.compile_with_xelatex(output_tex_basename, self.output_dir)
             if success:
                 pdf_name = os.path.splitext(output_tex_basename)[0] + ".pdf"
                 pdf_path = os.path.join(self.output_dir, pdf_name)
-                print(f"✅ PDF文件已生成: {pdf_path}")
+                logging.info(f"✅ PDF文件已生成: {pdf_path}")
             else:
-                print("⚠️ PDF编译失败，但LaTeX文件已成功生成")
-                print(f"您可以手动运行以下命令编译: cd {self.output_dir} && xelatex {output_tex_basename}")
+                logging.warning("⚠️ PDF编译失败，但LaTeX文件已成功生成")
+                logging.info(f"您可以手动运行以下命令编译: cd {self.output_dir} && xelatex {output_tex_basename}")
         
         return output_filepath, pdf_path
 
@@ -1121,9 +1157,9 @@ def main():
     specific_md_file = None
     if len(sys.argv) > 1:
         specific_md_file = sys.argv[1]
-        print(f"使用指定Markdown文件: {specific_md_file}")
+        logging.info(f"使用指定Markdown文件: {specific_md_file}")
     else:
-        print(f"未指定文件，将自动从 '{exporter.markdown_source_dir}' 选择最新的Markdown文件")
+        logging.info(f"未指定文件，将自动从 '{exporter.markdown_source_dir}' 选择最新的Markdown文件")
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -1143,7 +1179,7 @@ def main():
     
     output_tex_filename = f"{research_field_for_filename}_{timestamp}.tex"
     
-    print(f"🔄 正在导出研究计划为 {output_tex_filename} 并编译PDF...")
+    logging.info(f"🔄 正在导出研究计划为 {output_tex_filename} 并编译PDF...")
     # 调用 exporter.export_proposal，它现在内部处理Mermaid
     tex_file_path, pdf_file_path = exporter.export_proposal(
         output_filename=output_tex_filename,
@@ -1152,11 +1188,11 @@ def main():
     )
     
     if tex_file_path:
-        print(f"\n导出完成！")
-        print(f"LaTeX文件: {tex_file_path}")
+        logging.info(f"\n导出完成！")
+        logging.info(f"LaTeX文件: {tex_file_path}")
         if pdf_file_path:
-            print(f"PDF文件: {pdf_file_path}")
-            print("✅ 所有文件已成功生成！")
+            logging.info(f"PDF文件: {pdf_file_path}")
+            logging.info("✅ 所有文件已成功生成！")
             try:
                 import platform
                 if platform.system() == "Linux":
@@ -1166,11 +1202,11 @@ def main():
                 elif platform.system() == "Windows":
                     subprocess.run(['start', pdf_file_path], shell=True, check=False)
             except Exception as e:
-                print(f"无法自动打开PDF文件: {e}. 请手动打开: {pdf_file_path}")
+                logging.error(f"无法自动打开PDF文件: {e}. 请手动打开: {pdf_file_path}")
         else:
-            print("⚠️ LaTeX文件已生成，但PDF编译失败。请检查LaTeX环境配置。")
+            logging.warning("⚠️ LaTeX文件已生成，但PDF编译失败。请检查LaTeX环境配置。")
     else:
-        print("❌ 导出失败。")
+        logging.error("❌ 导出失败。")
 
 if __name__ == "__main__":
     # 配置日志记录
