@@ -2,6 +2,7 @@ from pathlib import Path
 
 from src.agent.graph import ProposalAgent
 import os
+import subprocess
 
 
 def agent_service(proposal_id: str, research_question: str):
@@ -49,6 +50,11 @@ def agent_service(proposal_id: str, research_question: str):
             if files:
                 latest_report = os.path.join(output_dir, files[0])
                 print(f"✅ 最终研究计划书已生成并保存到: {latest_report}")
+                try:
+                    cmd = "uv run exporter2.py"
+                    subprocess.run(cmd, shell=True, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"❌ 执行导出脚本失败: {e}")
             else:
                 print("✅ 最终研究计划书内容已生成，但未找到具体文件路径。")
         else:
