@@ -27,4 +27,5 @@ dependencies = [
     "uvicorn[standard]>=0.34.3",
     "httptools>=0.6.4",
     "config>=0.5.1",
+    "scholarly>=1.7.11",
 ]

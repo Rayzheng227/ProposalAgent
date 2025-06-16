@@ -1,7 +1,7 @@
 from collections import deque
 from typing import Dict, Optional
 from threading import Lock
-from backend.src.entity.stream_mes import StreamMes
+from ..entity.stream_mes import StreamMes
 
 
 class QueueUtil:

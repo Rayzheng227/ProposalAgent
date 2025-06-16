@@ -7,7 +7,7 @@
 </p>
 
 # ProposalAgent
-A Proposal Agent for Advanced AI Course in HIAS
+A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization
 # Team Member
 郑锐、谢秋云、樊彬峰、禚宣伟、吴业阳
 
@@ -35,7 +35,8 @@ Proposal‑Agent 是一套用于 **自动生成并迭代优化科研计划书（
 # Requirements
 - `python>=3.10`
 - `uv`: Install uv as python project manager from [here](https://github.com/astral-sh/uv)
-- `xelatex`
+- `xelatex`: To export pdf from markdown
+- `mermaid-js/mermaid-cli` : Draw Gantt graph; use `mmdc --version` to show
 
 # Installation
 1. Clone the repository
