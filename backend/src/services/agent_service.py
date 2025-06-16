@@ -52,8 +52,8 @@ def agent_service(proposal_id: str, research_question: str):
                     QueueUtil.push_mes(StreamAnswerMes(
                         proposal_id=proposal_id,
                         title="开始导出",
-                        content="🔄 正在将研究计划书导出为PDF格式...",
-                        step=1
+                        content="🔄 正在将研究计划书导出为PDF格式",
+                        step=100
                     ))
                     
                     # 执行导出脚本
@@ -86,7 +86,7 @@ def agent_service(proposal_id: str, research_question: str):
                                 proposal_id=proposal_id,
                                 title="导出进度",
                                 content=line,
-                                step=2
+                                step=101
                             ))
                     
                     if result.stderr:
@@ -98,7 +98,7 @@ def agent_service(proposal_id: str, research_question: str):
                                 proposal_id=proposal_id,
                                 title="导出警告",
                                 content=f"⚠️ {line}",
-                                step=2
+                                step=101
                             ))
                     
                     # 发送完成消息
@@ -106,7 +106,7 @@ def agent_service(proposal_id: str, research_question: str):
                         proposal_id=proposal_id,
                         title="导出完成",
                         content="✅ PDF导出完成",
-                        step=3,
+                        step=102,
                         is_finish=True
                     ))
                     
@@ -120,7 +120,7 @@ def agent_service(proposal_id: str, research_question: str):
                         proposal_id=proposal_id,
                         title="导出失败",
                         content=f"❌ {error_msg}",
-                        step=3,
+                        step=103,
                         is_finish=True
                     ))
                     raise Exception(f"导出失败: {e.stderr}")
@@ -132,7 +132,7 @@ def agent_service(proposal_id: str, research_question: str):
                         proposal_id=proposal_id,
                         title="导出失败",
                         content=f"❌ {error_msg}",
-                        step=3,
+                        step=103,
                         is_finish=True
                     ))
                     raise Exception(f"导出失败: {str(e)}")

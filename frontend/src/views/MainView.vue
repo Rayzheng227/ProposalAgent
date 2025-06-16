@@ -5,8 +5,10 @@
         {{ name }}
       </div>
     </div>
+    <img ref="movingImage" src="/src/assets/imgs/logo.png" class="moving-image" />
     <div class="overlay">
       <div class="main">
+
         <div class="left-top-hole"></div>
         <div class="right-top-hole"></div>
         <div class="left-bottom-hole"></div>
@@ -41,12 +43,11 @@
             </div>
           </div>
         </div>
-        <div class="right" v-loading="isLoading" element-loading-text="正在连接服务器~~"
-          element-loading-background="rgba(255, 255, 255, 0.05)">
+        <div class="right">
           <div v-if="activeHistoryId != null" class="communication">
-            <div class="chat-records" ref="chatRecordsRef">
-              <div v-show="rendered"
-                v-for="(message, index) in histories.find((item) => item.id === activeHistoryId)?.messages">
+            <div v-if="rendered" class="chat-records" ref="chatRecordsRef" v-loading="isLoading"
+              element-loading-text="正在连接服务器~~" element-loading-background="rgba(255, 255, 255, 0)">
+              <div v-for="(message, index) in histories.find((item) => item.id === activeHistoryId)?.messages">
                 <template v-if="message.role === 'user'">
                   <BaseMessagePanel :message="(message as BaseMessage)"></BaseMessagePanel>
                 </template>
@@ -63,7 +64,8 @@
               </template>
               开启新对话
             </el-button>
-            <QueryInput ref="queryInputRef" @send="send"></QueryInput>
+            <QueryInput :first-chatting="isChatting" ref="queryInputRef" @send="send" @stop="stopChatting()">
+            </QueryInput>
           </div>
           <div v-else class="island">
             <div class="head">
@@ -80,41 +82,59 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted, nextTick, getCurrentInstance, watch } from "vue";
+import { ref, onMounted, nextTick, getCurrentInstance, watch, onUnmounted } from "vue";
 import { ElMessage } from 'element-plus';
 import type { History, BaseMessage, AIAnswerMessage, AIQuestionMessage, R } from "@/common/interfaces";
 import { getRandomId } from "@/utils/stringUtil";
 import QueryInput from "@/components/QueryInput.vue";
 import BaseMessagePanel from "@/components/BaseMessagePanel.vue";
 import AIMessagePanel from "@/components/AiMessagePanel.vue";
+import WebSocketUtil from "@/request/Ws";
 import { useHistoryStore } from "@/stores/HistoryStore";
 
 const instance: any = getCurrentInstance();
 const proxy = instance.proxy;
-const chatRecordsRef = ref<any>(null);
-const queryInputRef = ref<any>(null);
+const chatRecordsRef = ref<any>(null); // 聊天记录引用
+const queryInputRef = ref<any>(null); // 输入框引用
 
-const historyStore = useHistoryStore();
-const isCollapse = ref(false);
-const rendered = ref(false);
-const histories = ref<History[]>([]);
-const activeHistoryId = ref<string | null>(null);
-const isChatting = ref<boolean>(false);
-const isUserScrolling = ref(false);
-const isLoading = ref(false);
+const historyStore = useHistoryStore(); // 历史记录存储
+const isCollapse = ref(false); // 是否折叠左侧菜单
+const rendered = ref(false); // 是否渲染聊天记录
+const histories = ref<History[]>([]); // 历史记录
+const activeHistoryId = ref<string | null>(null); // 当前激活的历史记录ID
+const isChatting = ref<boolean>(false); // 是否正在聊天
+const isUserScrolling = ref(false); // 是否用户正在手动滚动
+const isLoading = ref(false); // 是否正在加载
+const currentWs = ref<WebSocketUtil | null>(null); // 当前的WebSocket连接
+
 const nameElements = ref<HTMLElement[]>([]);
-const names = ref<string[]>(["郑锐", "谢秋云", "樊彬峰", "禚宣伟", "吴页阳"])
+const names = ref<string[]>(["郑锐", "谢秋云", "樊彬峰", "禚宣伟", "吴业阳"])
+
+const movingImage = ref<HTMLElement | null>(null);
+// 移动参数（全部固定值）
+const imageWidth = 300;
+const imageHeight = 300;
+const speed = 0.5; // 移动速度
+let x = 0;
+let y = 0;
+let vx = speed; // x轴速度（向右为正）
+let vy = speed; // y轴速度（向下为正）
+let animationFrameId: any = null;
+let containerWidth = 0;
+let containerHeight = 0;
+
 
 const loadHistories = () => {
+  // 从历史记录存储中加载历史记录
   histories.value = historyStore.loadHistories();
-  if (activeHistoryId.value != null) {
-    scrollToBottom();
-    return;
-  };
-  if (histories.value.length > 0) {
+  // 如果当前已经点击了一个历史记录，则直接滚动到底部
+  if (activeHistoryId.value != null) scrollToBottom();
+  // 否则，如果有历史记录，且不在聊天中，则将第一条历史记录的ID设置为激活的历史记录ID，并滚动到底部
+  // 不在聊天中，才允许跳转到第一个记录，否则会因为ws里一直loadHistories导致一直跳到第一个history里
+  else if (!isChatting.value && histories.value.length > 0) {
     activeHistoryId.value = histories.value[0].id;
     scrollToBottom();
-  } else activeHistoryId.value = null;
+  }
 }
 
 const switchHistory = (id: string) => {
@@ -122,6 +142,7 @@ const switchHistory = (id: string) => {
   rendered.value = false; // 切换时先隐藏消息
   activeHistoryId.value = id;
   loadHistories();
+  nextTick(() => rendered.value = true)
 }
 
 const toggleCollapse = () => isCollapse.value = !isCollapse.value;
@@ -134,6 +155,14 @@ const removeHistory = (id: string) => {
 }
 
 const toIsland = () => activeHistoryId.value = null;
+
+const stopChatting = () => {
+  isLoading.value = false;
+  isChatting.value = false;
+  currentWs.value?.close();
+  currentWs.value = null;
+  queryInputRef.value.stop(false); // 按钮由可停止改为可发送
+}
 
 const send = async (query: string, isClarification: boolean) => {
   // 如果当前正在发送消息，则不允许发送操作
@@ -186,11 +215,10 @@ const send = async (query: string, isClarification: boolean) => {
   historyStore.addBaseMessage(activeHistory.id, message);
   loadHistories();
 
-  // WS连接实时接收最新消息，添加到消息列表中
-  const ws = new proxy.Ws({
+  currentWs.value = new WebSocketUtil({
     url: `${proxy.Api.loadMessageStream}/${activeHistoryId.value}`,
     autoReconnect: true,
-    onMessage: (r: R) => {
+    onMessage: (r: any) => {
       // 首次接收消息时，关闭加载动画，同时允许自动向下滚动
       if (isLoading.value) {
         isLoading.value = false
@@ -202,21 +230,19 @@ const send = async (query: string, isClarification: boolean) => {
         historyStore.addAIQuestionMessageChunk(proposalId, isFinish, content);
         loadHistories();
         if (isFinish) {
-          isChatting.value = false;
-          startCountDown()
-          ws.close();
+          queryInputRef.value.startCountDown() // 开启倒计时
+          stopChatting() // 关闭WS连接
         }
       } else { // 处理AI回答消息
         const { proposalId, isFinish, step, title, content } = parsed;
         historyStore.addAIAnswerMessageChunk(proposalId, isFinish, step, title, content);
         loadHistories();
-        if (isFinish) {
-          isChatting.value = false;
-          ws.close();
-        }
+        if (isFinish) stopChatting()
+
       }
     },
-    onError: (err: any) => isChatting.value = false
+    onError: (err: any) => stopChatting()
+
   });
 }
 
@@ -237,8 +263,6 @@ const refresh = (index: number) => {
   send(oldQuery, false);
 }
 
-const startCountDown = () => queryInputRef.value.startCountDown();
-
 // 滚动事件处理函数
 const handleScroll = () => {
   if (!chatRecordsRef.value) return;
@@ -249,19 +273,39 @@ const handleScroll = () => {
   isUserScrolling.value = (scrollHeight - (scrollTop + clientHeight) > threshold);
 };
 
-// 滚动到底部并显示消息的方法
 const scrollToBottom = () => {
-  // 用户手动滚动过则不自动滚动
   if (isUserScrolling.value) return;
-  setTimeout(() => {
-    rendered.value = true;
-    nextTick(() => {
-      if (!chatRecordsRef.value) return;
-      const element = chatRecordsRef.value;
-      element.scrollTop = element.scrollHeight;
-    })
-  }, 50);
 
+  nextTick(() => {
+    rendered.value = true;
+
+    setTimeout(() => {
+      const element = chatRecordsRef.value;
+      if (!element) return;
+
+      // 目标滚动位置
+      const targetScrollTop = element.scrollHeight;
+      let currentScrollTop = element.scrollTop;
+      const duration = 300; // 滚动持续时间(毫秒)
+      const startTime = performance.now();
+
+      const smoothScroll = (timestamp: number) => {
+        const elapsed = timestamp - startTime;
+        if (elapsed < duration) {
+          // 计算滚动进度 (使用easeOutQuart缓动函数)
+          const progress = 1 - Math.pow(1 - elapsed / duration, 4);
+          // 计算当前滚动位置
+          currentScrollTop = Math.floor(progress * (targetScrollTop - currentScrollTop) + currentScrollTop);
+          element.scrollTop = currentScrollTop;
+          requestAnimationFrame(smoothScroll);
+        } else {
+          element.scrollTop = targetScrollTop;
+        }
+      };
+
+      requestAnimationFrame(smoothScroll);
+    }, 100);
+  });
 }
 
 // 随机打乱名字顺序，并为每个名字设置随机动画速度
@@ -290,9 +334,8 @@ watch(activeHistoryId, (newVal) => {
   if (newVal !== null) {
     // 进入聊天界面，等待DOM渲染后绑定滚动事件
     nextTick(() => {
-      if (chatRecordsRef.value) {
+      if (chatRecordsRef.value)
         chatRecordsRef.value.addEventListener('scroll', handleScroll);
-      }
     });
   } else {
     if (chatRecordsRef.value)
@@ -300,10 +343,82 @@ watch(activeHistoryId, (newVal) => {
   }
 });
 
+
+
+// 初始化图片移动
+const initImageMovement = () => {
+  if (!movingImage.value) return;
+  // 获取容器尺寸
+  const background = document.querySelector('.background') as HTMLElement;
+  if (!background) return;
+  containerWidth = background.offsetWidth;
+  containerHeight = background.offsetHeight;
+  // 随机初始位置（避开边界）
+  x = Math.random() * (containerWidth - imageWidth);
+  y = Math.random() * (containerHeight - imageHeight);
+  // 应用初始位置
+  updateImagePosition();
+  // 开始动画
+  startAnimation();
+};
+
+// 更新图片位置
+const updateImagePosition = () => {
+  if (movingImage.value) {
+    movingImage.value.style.left = `${x}px`;
+    movingImage.value.style.top = `${y}px`;
+  }
+};
+// 动画帧函数
+const animate = () => {
+  // 更新坐标
+  x += vx;
+  y += vy;
+  // 撞墙反弹检测（固定边界处理）
+  if (x < 0 || x > containerWidth - imageWidth)
+    vx = -vx; // 反转x轴速度
+  if (y < 0 || y > containerHeight - imageHeight)
+    vy = -vy; // 反转y轴速度
+  // 应用新位置
+  updateImagePosition();
+  // 继续下一帧
+  animationFrameId = requestAnimationFrame(animate);
+};
+
+// 开始动画
+const startAnimation = () => {
+  if (animationFrameId) return;
+  animationFrameId = requestAnimationFrame(animate);
+};
+
+// 停止动画
+const stopAnimation = () => {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+};
+
+// 窗口大小变化时重新计算边界
+const handleResize = () => {
+  const background = document.querySelector('.background') as HTMLElement;
+  if (background) {
+    containerWidth = background.offsetWidth;
+    containerHeight = background.offsetHeight;
+  }
+};
+
 onMounted(() => {
   loadHistories();
   randomNameElementSpeed()
+  initImageMovement();
+  window.addEventListener('resize', handleResize);
 });
+
+onUnmounted(() => {
+  stopAnimation();
+  window.removeEventListener('resize', handleResize);
+})
 
 
 </script>
@@ -313,7 +428,15 @@ onMounted(() => {
   width: 100vw;
   height: 100vh;
   background-color: #000;
-  user-select: none;
+
+  .moving-image {
+    position: absolute;
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 0px 16px 2px #fff;
+  }
 
   .bg-name-container {
     width: 100%;
@@ -361,7 +484,7 @@ onMounted(() => {
       height: 97%;
       border-width: 2px;
       border-radius: 20px;
-      box-shadow: -6px -6px 24px 4px rgba(255, 255, 255, 0.3);
+      box-shadow: 0px 0px 12px 6px rgba(184, 184, 184, 0.3);
 
       .left-top-hole {
         position: absolute;
@@ -436,7 +559,8 @@ onMounted(() => {
           width: 250px;
           height: 100%;
           border-radius: 30px;
-          box-shadow: inset -4px -4px 12px 2px rgba(255, 255, 255, 0.3);
+          background-color: rgba(20, 20, 20, 0.3);
+          box-shadow: inset -3px -3px 10px 1px #777;
           transition: width 0.3s ease;
 
           &.collapsed {
@@ -524,6 +648,7 @@ onMounted(() => {
             overflow: auto;
             margin-top: 20px;
             border-top: 2px solid #333;
+            padding-bottom: 5px;
 
             .histories-item {
               flex-shrink: 0;
@@ -534,9 +659,8 @@ onMounted(() => {
               height: 50px;
               margin-top: 20px;
               color: #ccc;
-              border-top: 1px solid #777;
               border-radius: 10px;
-              box-shadow: -1px -1px 4px 0px rgba(255, 255, 255, 0.3);
+              box-shadow: -1px -1px 5px 0px #aaa;
 
               .status {
                 display: flex;
@@ -589,6 +713,7 @@ onMounted(() => {
         align-items: center;
         justify-content: center;
         height: 100%;
+        overflow: auto;
 
         .island {
           display: flex;
@@ -597,12 +722,12 @@ onMounted(() => {
           justify-content: center;
           width: 40%;
           min-width: 600px;
-          max-width: 800px;
           padding-top: 20px;
           padding-bottom: 20px;
           color: #ccc;
           border-radius: 20px;
-          box-shadow: 0px 0px 12px 0px rgba(255, 255, 255, 0.3);
+          box-shadow: 0px 0px 10px 5px rgba(255, 255, 255, 0.2);
+          backdrop-filter: blur(4px);
 
           .head {
             display: flex;
@@ -618,6 +743,7 @@ onMounted(() => {
               font-weight: bold;
               font-family: "Arial", sans-serif;
               margin-left: 10px;
+              text-shadow: 1px 1px 4px red, 3px 3px 20px rgb(74, 74, 255);
             }
           }
 
@@ -635,7 +761,7 @@ onMounted(() => {
           align-items: center;
           justify-content: space-evenly;
           width: 100%;
-          max-width: 1000px;
+          max-width: 1200px;
           height: 96%;
 
           .chat-records {

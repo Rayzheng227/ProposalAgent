@@ -1,5 +1,5 @@
 import uvicorn
-from src.routers.start import app
+from src.routers.server import app
 from src.routers.config import ServerConfig
 
 if __name__ == "__main__":

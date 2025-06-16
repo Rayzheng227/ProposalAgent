@@ -10,9 +10,8 @@
         <div class="question">{{ props.message.content }}</div>
       </div>
       <div v-if="!props.message.isFinish" class="final-info">
-        ✅ 当你看到这条消息时，如果任务还在执行中，请耐心等待~~
-        <br />
-        ❌ 否则说明已发生错误，请稍后重新发起提问
+        当你看到这条消息时，如果任务还在执行中，请耐心等待~~
+        <img class="wait" src="/src/assets/imgs/textLoading.gif" />
       </div>
       <div class="action-bar">
         <img class="icon-copy" src="/src/assets/imgs/copy.png" title="复制" @click="copyMessage" />
@@ -27,10 +26,8 @@
       </div>
       <div class="message-content" :class="{ collapsed: isCollapsed }">
         <div v-for="step, index in (props.message as AIAnswerMessage).steps" :key="step.title">
-          <div :style="stepStyles[index % stepStyles.length].titleStyle" class="title">{{ step.title }}</div>
-          <div :style="stepStyles[index % stepStyles.length].contentStyle" class="content">
-            {{ step.content }}
-          </div>
+          <div class="title">{{ step.title }}</div>
+          <MarkdownRenderer :content="step.content"></MarkdownRenderer>
         </div>
       </div>
       <div v-if="!props.message.isFinish" class="final-info">
@@ -39,61 +36,52 @@
       </div>
       <div v-else class="download-bar">
         <span class="info">任务执行完成，点击右边按钮下载最终报告吧！</span>
-        <img class="icon-pdf" src="/src/assets/imgs/pdf.png" @click="download('pdf')" />
-        <img class="icon-md" src="/src/assets/imgs/markdown.png" @click="download('md')" />
+        <el-dropdown placement="bottom" trigger="click">
+          <img class="icon-pdf" src="/src/assets/imgs/pdf.png" />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="preview('pdf')">预览</el-dropdown-item>
+              <el-dropdown-item @click="download('pdf')">下载</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown placement="bottom" trigger="click">
+          <img class="icon-md" src="/src/assets/imgs/markdown.png" />
+          <template #dropdown>
+            <el-dropdown-menu class="inner-menu">
+              <el-dropdown-item @click="preview('md')">预览</el-dropdown-item>
+              <el-dropdown-item @click="download('md')">下载</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
       <div class="action-bar">
         <img class="icon-copy" src="/src/assets/imgs/copy.png" title="复制" @click="copyMessage" />
         <img class="icon-refresh" src="/src/assets/imgs/refresh.png" title="重新生成" @click="refresh" />
       </div>
     </div>
-
   </div>
+  <Window v-if="isPreviewing" :file-type="previewType" :history-id="props.historyId" @close="closeWindow()"></Window>
 </template>
 
 <script lang="ts" setup>
 import { ref, computed, getCurrentInstance } from 'vue'
 import { ElMessage } from 'element-plus'
+import Window from './preview/Window.vue';
+import MarkdownRenderer from './MarkdownRenderer.vue';
 import { getRandomId } from '@/utils/stringUtil';
 import type { AIAnswerMessage, AIQuestionMessage } from '@/common/interfaces'
 
 const instance: any = getCurrentInstance();
 const proxy = instance.proxy;
-
 const props = defineProps<{
   index: number,
   historyId: string,
   message: AIAnswerMessage | AIQuestionMessage
 }>()
-
-const stepStyles = [
-  {
-    "titleStyle": {
-      "color": "skyblue"
-    },
-    "contentStyle": {
-      "color": "#aaa"
-    }
-  },
-  {
-    "titleStyle": {
-      "color": "darkcyan",
-    },
-    "contentStyle": {
-      "color": "#bbb"
-    }
-  }, {
-    "titleStyle": {
-      "color": "darkgoldenrod",
-    },
-    "contentStyle": {
-      "color": "#ccc"
-    }
-  }
-]
 const isCollapsed = ref(false)
-
-
+const isPreviewing = ref(false)
+const previewType = ref("pdf")
 
 const toggleBtnStyle = computed(() => ({
   transform: isCollapsed.value ? 'rotate(0deg)' : 'rotate(180deg)'
@@ -152,8 +140,24 @@ const download = async (fileType: string) => {
     a.click()
     a.remove()
   }
-
 };
+
+const preview = async (fileType: string) => {
+  const result = await proxy.Request({
+    url: proxy.Api.checkFileExist,
+    data: {
+      fileType,
+      historyId: props.historyId
+    }
+  });
+  if (result) {
+    previewType.value = fileType;
+    isPreviewing.value = true;
+  }
+};
+
+const closeWindow = () => isPreviewing.value = false;
+
 
 </script>
 
@@ -205,10 +209,7 @@ const download = async (fileType: string) => {
     border: 2px solid #444;
     border-radius: 15px 15px 15px 0;
     padding: 15px;
-    width: calc(75%);
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    word-break: break-all;
+    width: 75%;
     overflow: hidden;
     transition: all 1s ease;
     backdrop-filter: blur(8px);
@@ -218,15 +219,18 @@ const download = async (fileType: string) => {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       line-height: 1.5;
       color: #ffd67d;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      word-break: break-all;
     }
 
     .title {
       height: 30px;
-      padding: 10px 0;
-      border-top: 1px solid #777;
-      font-size: 18px;
+      padding: 15px 0;
+      border-bottom: 1px solid #aaa;
+      font-size: 28px;
       font-weight: bold;
-      color: skyblue;
+      color: #ccc;
     }
 
     .content {
