@@ -3,7 +3,7 @@ import re
 import glob
 import subprocess
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 import json
 import shutil
 import logging
@@ -13,6 +13,8 @@ import time
 from backend.src.utils.queue_util import QueueUtil
 from backend.src.entity.stream_mes import StreamAnswerMes
 import sys
+from openai import OpenAI
+from langchain.schema import SystemMessage, HumanMessage
 
 load_dotenv()
 Api_key = os.getenv('DASHSCOPE_API_KEY')
@@ -53,14 +55,15 @@ class ProposalExporter:
             
         self.llm = ChatOpenAI(
             api_key=self.api_key,
-            model="qwen-plus-latest",
+            model="qwen-plus",
             base_url=self.base_url,
             temperature=0,
             streaming=True,
         )
-        # 添加导出步骤计数器
+        
+        # 设置导出步骤
         self.export_step = 0
-
+        
         # 获取当前脚本所在目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
@@ -91,7 +94,7 @@ class ProposalExporter:
         # 确保这些目录存在
         os.makedirs(self.final_mermaid_images_dir, exist_ok=True)
         os.makedirs(self.temp_mermaid_files_dir, exist_ok=True)
-        
+
     def _escape_latex(self, text: str) -> str:
         """Escapes special LaTeX characters in a string."""
         if not text: return ""
@@ -594,12 +597,34 @@ class ProposalExporter:
      * 删除所有 () 链接符号
      * 删除所有 | 表格符号
      * 删除所有 --- 分隔线符号
-   - 特别要求：
-     * 删除所有中文数字编号（如"一、"、"二、"等）
-     * 删除所有阿拉伯数字编号（如"1."、"2."等）
-     * 删除所有带括号的编号（如"（一）"、"（1）"等）
-     * 删除所有带点的编号（如"1.1"、"1.2"等）
-     * 删除所有带顿号的编号（如"一、"、"二、"等）
+7. 反斜杠使用规则：
+   - 严格禁止在非LaTeX命令中使用反斜杠（\\）
+   - 只允许在以下情况使用反斜杠：
+     * LaTeX命令中（如 \\textbf、\\textit、\\subsection 等）
+     * LaTeX环境中（如 \\begin、\\end 等）
+     * LaTeX特殊字符转义（如 \\%、\\$、\\# 等）
+   - 如果原文中包含反斜杠，需要：
+     * 如果是LaTeX命令，保持原样
+     * 如果是普通文本中的反斜杠，需要删除或替换为其他符号
+   - 特别注意：
+     * 不要在普通文本中使用反斜杠作为分隔符
+     * 不要在普通文本中使用反斜杠作为转义字符
+     * 不要在普通文本中使用反斜杠作为路径分隔符
+     * 严格禁止使用非LaTeX语法的反斜杠，例如：
+       - 禁止使用 \\Minecraft、\\CS 等游戏相关缩写
+       - 禁止使用 \\Windows、\\Linux 等操作系统名称
+       - 禁止使用 \\Python、\\Java 等编程语言名称
+       - 禁止使用 \\AI、\\ML 等缩写
+       - 禁止使用 \\URL、\\HTTP 等网络相关缩写
+       - 禁止使用 \\CPU、\\GPU 等硬件相关缩写
+       - 禁止使用 \\API、\\SDK 等软件相关缩写
+       - 禁止使用 \\PDF、\\HTML 等文件格式缩写
+       - 禁止使用 \\USB、\\HDMI 等接口名称
+       - 禁止使用 \\WiFi、\\4G 等网络技术名称
+     * 如果遇到这些情况，应该：
+       - 删除反斜杠，直接使用原文本（如 "Minecraft" 而不是 "\\Minecraft"）
+       - 或者使用适当的LaTeX命令（如 \\texttt{{Minecraft}} 如果需要特殊格式）
+       - 或者使用其他合适的表达方式
 
 Markdown内容：
 {truncated_content}
@@ -611,7 +636,7 @@ Markdown内容：
             from langchain_core.messages import HumanMessage, SystemMessage
             
             response = self.llm.invoke([
-                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请严格按照要求转换格式，保持原文内容不变。对于图片和表格相关的LaTeX代码，请保持原样。确保清理所有Markdown格式符号和编号。特别注意表格的转换，使用tabularx环境并设置合适的列宽比例。"),
+                SystemMessage(content="你是一个专业的LaTeX格式转换助手。请严格按照要求转换格式，保持原文内容不变。对于图片和表格相关的LaTeX代码，请保持原样。确保清理所有Markdown格式符号和编号。特别注意表格的转换，使用tabularx环境并设置合适的列宽比例。特别注意反斜杠的使用，只在LaTeX命令和环境中使用，严格禁止使用非LaTeX语法的反斜杠。"),
                 HumanMessage(content=prompt)
             ])
             
@@ -646,6 +671,21 @@ Markdown内容：
             latex_content = re.sub(r'^\d+[、.．。]', '', latex_content, flags=re.MULTILINE)  # 删除阿拉伯数字编号
             latex_content = re.sub(r'^[（(]\d+[）)]', '', latex_content, flags=re.MULTILINE)  # 删除带括号的阿拉伯数字编号
             latex_content = re.sub(r'^\d+\.\d+[、.．。]', '', latex_content, flags=re.MULTILINE)  # 删除带点的编号
+            
+            # 6. 清理非LaTeX命令中的反斜杠
+            # 保留LaTeX命令中的反斜杠
+            latex_content = re.sub(r'(?<!\\)\\(?![\w{])', '', latex_content)  # 删除非LaTeX命令中的反斜杠
+            
+            # 7. 清理特定的非LaTeX语法的反斜杠
+            non_latex_patterns = [
+                r'\\Minecraft', r'\\CS', r'\\Windows', r'\\Linux',
+                r'\\Python', r'\\Java', r'\\AI', r'\\ML',
+                r'\\URL', r'\\HTTP', r'\\CPU', r'\\GPU',
+                r'\\API', r'\\SDK', r'\\PDF', r'\\HTML',
+                r'\\USB', r'\\HDMI', r'\\WiFi', r'\\4G'
+            ]
+            for pattern in non_latex_patterns:
+                latex_content = re.sub(pattern, lambda m: m.group(0)[1:], latex_content)  # 删除反斜杠，保留文本
             
             return latex_content.strip()
         except Exception as e:
@@ -1039,11 +1079,10 @@ Markdown内容：
                     f"\\label{{fig:gantt}}\n"
                     f"\\end{{figure}}\n\n"
                 )
-                logging.info(f'✅ 使用已生成的甘特图图片: {fname}')
+                logging.debug(f'✅ 使用已生成的甘特图图片: {fname}')
                 break
 
         # 替换模板中的占位符
-        # filled_template = filled_template.replace('%MERMAID_IMAGE%', gantt_figure_code)
         filled_template = filled_template.replace('[Mermaid Image]', gantt_figure_code)
         
         return filled_template
@@ -1064,7 +1103,6 @@ Markdown内容：
         tex_name_without_ext = os.path.splitext(tex_basename)[0]
         # tex_full_path 是指在 output_dir 中的路径
         tex_full_path = os.path.join(output_dir, tex_basename)
-
 
         logging.info(f"正在使用xelatex编译: {tex_full_path}")
 
@@ -1099,13 +1137,13 @@ Markdown内容：
         else:
             logging.warning(f"⚠️ 未找到Logo文件: {logo_source_file}，将不包含Logo。")
 
-
         try:
             original_cwd = os.getcwd()
             os.chdir(output_dir) # 切换到编译目录
             logging.debug(f"当前工作目录: {os.getcwd()}")
             logging.debug(f"编译文件: {tex_basename}") # 应该只编译文件名
 
+            # 第一次编译
             result1 = subprocess.run([
                 'xelatex',
                 '-interaction=nonstopmode',
@@ -1124,6 +1162,7 @@ Markdown内容：
                         logging.error(f"Log文件内容:\n{log_content[-1000:]}")
                 return False
 
+            # 第二次编译（处理交叉引用）
             logging.info("正在进行第二次编译（处理交叉引用）...")
             result2 = subprocess.run([
                 'xelatex',
@@ -1139,7 +1178,7 @@ Markdown内容：
 
             pdf_filename = f"{tex_name_without_ext}.pdf"
             if os.path.exists(pdf_filename):
-                logging.info(f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}") # 使用os.getcwd()获取绝对路径
+                logging.info(f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}")
                 self._cleanup_temp_files(tex_name_without_ext)
                 try:
                     os.remove("phdproposal.cls") # 清理复制的cls文件
@@ -1165,7 +1204,7 @@ Markdown内容：
             logging.error(f"❌ 编译过程中发生错误: {e}")
             return False
         finally:
-            os.chdir(original_cwd)
+            os.chdir(original_cwd)  # 恢复原始工作目录
 
     def _cleanup_temp_files(self, tex_name_without_ext: str):
         """清理LaTeX编译产生的临时文件"""
@@ -1181,16 +1220,16 @@ Markdown内容：
     
     def send_progress_message(self, title: str, content: str, step: int = None, is_finish: bool = False):
         """发送进度消息"""
-        if step is None:
-            self.export_step += 1
-            step = self.export_step
-            
-        QueueUtil.push_mes(StreamAnswerMes(
-            proposal_id=self.proposal_id,
-            step=step,
-            title=title,
-            content=content
-        ))
+        import json
+        message = json.dumps({
+            "proposal_id": self.proposal_id,
+            "step": step,
+            "title": title,
+            "content": content,
+            "is_finish": is_finish
+        })
+        logging.info(f"QUEUE_MESSAGE:{message}")  # 使用logging而不是print
+
 
     def export_proposal(self, output_filename: str = "generated_proposal.tex", compile_pdf: bool = True, specific_file: str = None):
         """

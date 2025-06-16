@@ -22,6 +22,7 @@ import scholarly
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import requests
 import urllib.parse
+from tavily import TavilyClient
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
@@ -203,37 +204,34 @@ def search_web_content_tool(query: str) -> List[Dict]:
     logging.info(f"正在网络搜索关键词:{queries}")
 
     try:
-        os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
-        tavily_tool = TavilySearchResults(
-            max_results=5,
-            search_depth="advanced",
-            include_answer=True,
-            include_raw_content=True
-        )
-
+        # 初始化Tavily客户端
+        client = TavilyClient(api_key=TAVILY_API_KEY)
+        
         # 将查询列表合并为一个字符串
         combined_query = " OR ".join(queries)
-        raw_results = tavily_tool.invoke({"query": combined_query})
         
-        # 确保返回的是列表格式
-        if isinstance(raw_results, str):
-            # 如果返回的是字符串，尝试解析为JSON
-            try:
-                import json
-                results = json.loads(raw_results)
-            except:
-                # 如果解析失败，将字符串包装成字典
-                results = [{"content": raw_results}]
-        elif isinstance(raw_results, dict):
-            # 如果返回的是字典，转换为列表
-            results = [raw_results]
-        elif isinstance(raw_results, list):
-            # 如果已经是列表，直接使用
-            results = raw_results
-        else:
-            # 其他情况，包装成列表
-            results = [{"content": str(raw_results)}]
-            
+        # 执行搜索
+        response = client.search(
+            query=combined_query,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=True,
+            max_results=5
+        )
+        
+        # 处理搜索结果
+        results = []
+        if response and hasattr(response, 'results'):
+            for result in response.results:
+                result_dict = {
+                    "title": result.get('title', ''),
+                    "url": result.get('url', ''),
+                    "content": result.get('content', ''),
+                    "score": result.get('score', 0)
+                }
+                results.append(result_dict)
+        
+        logging.info(f"✅ 成功获取 {len(results)} 条搜索结果")
         return results
 
     except Exception as e:
