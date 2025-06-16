@@ -72,6 +72,7 @@ async def stream_mes(websocket: WebSocket, history_id: str):
 
     except WebSocketDisconnect:
         print(f"连接断开: {history_id}")
+        os._exit(1)
     finally:
         # 清理资源
         QueueUtil.del_queue(history_id)

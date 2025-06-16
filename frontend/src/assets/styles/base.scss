@@ -101,3 +101,25 @@ html.dark {
   font-size: 15px;
   color: #b1d4ee;
 }
+
+// 自定义el-popper
+.el-popper {
+  opacity: 0.7;
+  .el-scrollbar {
+    .el-dropdown-menu {
+      background: #222;
+    }
+
+    .el-dropdown-menu__item {
+      background-color: #222;
+      color: #fff;
+      font-size: 14px;
+      border-bottom: 1px solid #555;
+    }
+
+    .el-dropdown-menu__item:hover {
+      background-color: #444;
+      color: rgb(84, 206, 255);
+    }
+  }
+}

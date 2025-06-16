@@ -5,30 +5,22 @@ import time
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
-from typing import TypedDict, List, Dict, Any, Tuple
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from typing import List, Dict, Any, Tuple
 import json
 import os
-from datetime import datetime
 import logging
 from .prompts import *  # 确保 CLARIFICATION_QUESTION_PROMPT 从这里导入
-import fitz
 from dotenv import load_dotenv
 from .tools import search_arxiv_papers_tool, search_crossref_papers_tool, search_web_content_tool, summarize_pdf, generate_gantt_chart_tool, search_google_scholar_site_tool
 from .state import ProposalState
 from ..utils.queue_util import QueueUtil
 from ..utils.stream_mes_util import StreamUtil
-from ..entity.stream_mes import StreamMes, StreamClarifyMes, StreamAnswerMes
+from ..entity.stream_mes import StreamMes, StreamAnswerMes
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_dashscope import DashScopeEmbeddings
 
 load_dotenv()
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
@@ -68,7 +60,7 @@ class ProposalAgent:
         
         print("再初始化向量数据库...")
         # 初始化长期记忆
-        self.embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        self.embedding_function = DashScopeEmbeddings(model="text-embedding-v4")
         self.long_term_memory = Chroma(
             collection_name="proposal_agent_memory",
             embedding_function=self.embedding_function,
@@ -547,7 +539,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="参考文献处理",
-            content=f"\n开始处理~~"
+            content=f"\n\n开始处理"
         ))
 
         # 处理ArXiv论文
@@ -574,7 +566,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="",
-            content=f"\n✅ 成功处理Arxiv论文，共 {len(arxiv_papers)} 篇",
+            content=f"\n\n✅ 成功处理Arxiv论文，共 {len(arxiv_papers)} 篇",
         ))
 
         # 处理网络搜索结果和CrossRef结果
@@ -610,7 +602,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="",
-            content=f"\n✅ 成功处理网络结果和CrossRef论文，共 {len(web_results)} 篇",
+            content=f"\n\n✅ 成功处理网络结果和CrossRef论文，共 {len(web_results)} 篇",
         ))
 
         state["reference_list"] = reference_list
@@ -648,7 +640,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="引用编号处理",
-                content=f"\n✅ 成功生成Arxiv论文引用编号，共 {len(arxiv_refs)} 篇",
+                content=f"\n\n✅ 成功生成Arxiv论文引用编号，共 {len(arxiv_refs)} 篇",
             ))
 
         if web_refs:
@@ -662,7 +654,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content=f"\n✅ 成功生成网络资源和CrossRef论文引用编号，共 {len(web_refs)} 篇",
+                content=f"\n\n✅ 成功生成网络资源和CrossRef论文引用编号，共 {len(web_refs)} 篇",
             ))
 
         QueueUtil.push_mes(StreamAnswerMes(
@@ -706,7 +698,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="格式化文献",
-            content=f"\n✅ 成功生成格式化格式化后的参考文献，共 {len(reference_list)} 篇",
+            content=f"\n\n✅ 成功生成格式化格式化后的参考文献，共 {len(reference_list)} 篇",
         ))
         QueueUtil.push_mes(StreamAnswerMes(
             proposal_id=state["proposal_id"],
@@ -994,8 +986,6 @@ class ProposalAgent:
     def write_conclusion_node(self, state: ProposalState) -> ProposalState:
         """生成研究计划书的结论部分"""
         logging.info("🔄 进入 write_conclusion_node")
-        state["global_step_num"] += 1
-        start_time = time.time()
 
         research_field = state["research_field"]
         introduction_content = state.get("introduction", "")
@@ -1092,22 +1082,42 @@ class ProposalAgent:
                 
                 if gantt_chart_content and len(gantt_chart_content) > 0:
                     logging.info(f"甘特图内容预览: {gantt_chart_content[:200]}...")
-                    QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, "\n✅ 项目甘特图生成完成"))
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content="\n\n✅ 项目甘特图生成完成"
+                    ))
                 else:
                     logging.warning("⚠️ 甘特图生成成功但内容为空")
-                    QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, "\n⚠️ 甘特图生成成功但内容为空"))
+                    QueueUtil.push_mes(StreamAnswerMes(
+                        proposal_id=state["proposal_id"],
+                        step=state["global_step_num"],
+                        title="",
+                        content="\n\n⚠️ 甘特图生成成功但内容为空"
+                    ))
             else:
                 state["gantt_chart"] = ""
                 error_msg = gantt_result.get('message', '未知错误')
                 logging.warning(f"⚠️ 甘特图生成失败: {error_msg}")
-                QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, f"\n⚠️ 甘特图生成失败: {error_msg}"))
+                QueueUtil.push_mes(StreamAnswerMes(
+                    proposal_id=state["proposal_id"],
+                    step=state["global_step_num"],
+                    title="",
+                    content=f"\n\n⚠️ 甘特图生成失败: {error_msg}"
+                ))
                 
         except Exception as e:
             state["gantt_chart"] = ""
             logging.error(f"❌ 甘特图生成异常: {str(e)}")
             import traceback
             logging.error(f"详细异常信息: {traceback.format_exc()}")
-            QueueUtil.push_mes(StreamMes(state["proposal_id"], 7, f"\n❌ 甘特图生成异常: {str(e)}"))
+            QueueUtil.push_mes(StreamAnswerMes(
+                proposal_id=state["proposal_id"],
+                step=state["global_step_num"],
+                title="",
+                content=f"\n\n❌ 甘特图生成异常: {str(e)}"
+            ))
 
         # 最终验证并确保状态传递
         final_gantt_chart = state.get("gantt_chart", "")
@@ -1226,7 +1236,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="生成最终报告",
-            content="\n正在生成最终研究计划报告~~",
+            content="\n\n📝 正在生成最终研究计划报告",
         ))
         try:
             with open(report_filepath, 'w', encoding='utf-8') as f:
@@ -1279,7 +1289,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="评审计划书",
-            content="\n正在评审研究计划书..."
+            content="\n\n🔍 正在评审研究计划书"
         ))
         
         # 初始化ReviewerAgent并进行评审
@@ -1298,7 +1308,7 @@ class ProposalAgent:
                 overall_score = scores.get("总体评分", 0)
                 logging.info(f"🔍 从review_result中提取的总体评分: {overall_score}")
                 
-                score_message = f"\n✅ 评审完成，总体评分：{overall_score}/10"
+                score_message = f"\n\n✅ 评审完成，总体评分：{overall_score}/10"
                 for criterion, score in scores.items():
                     if criterion != "总体评分":
                         score_message += f"\n- {criterion}: {score}/10"
@@ -1353,7 +1363,7 @@ class ProposalAgent:
                         proposal_id=state["proposal_id"],
                         step=state["global_step_num"],
                         title="",
-                        content=f"\n📄 评审结果已保存到: {review_filepath}"
+                        content=f"\n\n📄 评审结果已保存到: {review_filepath}"
                     ))
                 except Exception as save_e:
                     logging.error(f"❌ 保存评审结果失败: {save_e}")
@@ -1361,7 +1371,7 @@ class ProposalAgent:
                         proposal_id=state["proposal_id"],
                         step=state["global_step_num"],
                         title="",
-                        content=f"\n⚠️ 评审结果保存失败: {save_e}"
+                        content=f"\n\n⚠️ 评审结果保存失败: {save_e}"
                     ))
             else:                # 评审失败
                 error_msg = review_result.get("error", "未知错误")
@@ -1371,7 +1381,7 @@ class ProposalAgent:
                     proposal_id=state["proposal_id"],
                     step=state["global_step_num"],
                     title="",
-                    content=f"\n❌ 评审失败: {error_msg}"
+                    content=f"\n\n❌ 评审失败: {error_msg}"
                 ))
     
         except Exception as e:
@@ -1383,7 +1393,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content=f"\n❌ 评审过程异常: {str(e)}"
+                content=f"\n\n❌ 评审过程异常: {str(e)}"
             ))
     
         QueueUtil.push_mes(StreamAnswerMes(
@@ -1555,7 +1565,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="生成修订指导",
-            content="\n正在生成修订指导..."
+            content="\n\n📝 正在生成修订指导"
         ))
         
         try:
@@ -1605,7 +1615,7 @@ class ProposalAgent:
                     proposal_id=state["proposal_id"],
                     step=state["global_step_num"],
                     title="",
-                    content=f"\n❌ 生成修订指导失败: {error_msg}"
+                    content=f"\n\n❌ 生成修订指导失败: {error_msg}"
                 ))
     
         except Exception as e:
@@ -1616,7 +1626,7 @@ class ProposalAgent:
             QueueUtil.push_mes(StreamAnswerMes(                proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content=f"\n❌ 修订指导生成异常: {str(e)}"
+                content=f"\n\n❌ 修订指导生成异常: {str(e)}"
             ))
     
         QueueUtil.push_mes(StreamAnswerMes(
@@ -1647,7 +1657,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content="\n⚠️ 无有效修订指导，跳过改进步骤"
+                content="\n\n⚠️ 无有效修订指导，跳过改进步骤"
             ))
             return state
     
@@ -1656,7 +1666,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="应用改进",
-            content="\n正在根据修订指导重新生成研究计划..."
+            content="\n\n🔄 正在根据修订指导重新生成研究计划"
         ))        # 生成新的proposal_id用于区分改进前后的版本（但消息仍推送到原proposal_id）
         improved_proposal_id = f"{proposal_id}_improved_{state.get('improvement_attempt', 1)}"
     
@@ -1693,18 +1703,18 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="改进引言",
-                content=f"\n🔄 根据修订指导重新生成引言部分..."
+                content=f"\n\n🔄 根据修订指导重新生成引言部分"
             ))
             
             # 重新生成引言（已考虑修订指导）
             state = self.write_introduction_node(state)
             
-            logging.info("🔄 根据修订指导重新生成文献综述部分...")
+            logging.info("\n🔄 根据修订指导重新生成文献综述部分")
             QueueUtil.push_mes(StreamAnswerMes(
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="改进文献综述",
-                content=f"\n🔄 根据修订指导重新生成文献综述部分..."
+                content=f"\n\n🔄 根据修订指导重新生成文献综述部分"
             ))
             
             # 重新生成文献综述
@@ -1715,7 +1725,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="改进研究设计",
-                content=f"\n🔄 根据修订指导重新生成研究设计部分..."
+                content=f"\n\n🔄 根据修订指导重新生成研究设计部分"
             ))
             
             # 重新生成研究设计
@@ -1726,7 +1736,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="改进结论",
-                content=f"\n🔄 根据修订指导重新生成结论部分..."
+                content=f"\n\n🔄 根据修订指导重新生成结论部分"
             ))
             
             # 重新生成结论
@@ -1738,7 +1748,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="生成改进报告",
-                content=f"\n� 重新生成最终改进报告..."
+                content=f"\n\n📄 重新生成最终改进报告"
             ))
             
             state = self.generate_final_references_node(state)
@@ -1748,7 +1758,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content=f"\n✅ 改进后的研究计划书已重新生成完成"
+                content=f"\n\n✅ 改进后的研究计划书已重新生成完成"
             ))
             
             # 明确标记改进流程完成
@@ -1763,7 +1773,7 @@ class ProposalAgent:
                 proposal_id=state["proposal_id"],
                 step=state["global_step_num"],
                 title="",
-                content=f"\n❌ 应用改进异常: {str(e)}"
+                content=f"\n\n❌ 应用改进异常: {str(e)}"
             ))
             # 即使出错也标记完成，避免无限循环
             state["improvement_completed"] = True
@@ -2031,7 +2041,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state["global_step_num"],
             title="保存成果",
-            content="\n💾 正在将研究成果存入知识库..."
+            content="\n\n💾 正在将研究成果存入知识库..."
         ))
 
         proposal_id = state.get("proposal_id")
@@ -2064,7 +2074,7 @@ class ProposalAgent:
             proposal_id=state["proposal_id"],
             step=state.get("global_step_num", 0),
             title="流程完成",
-            content=f"\n🎉 研究计划书生成完成！\n\n📄 最终报告已保存\n📚 参考文献已整理\n💾 成果已存入知识库\n\n✅ 所有流程已完成，可以下载结果文件。\n\n⏱️ 本阶段耗时: {time.time() - start_time:.2f}s",
+            content=f"\n\n🎉 研究计划书生成完成！\n\n📄 最终报告已保存\n📚 参考文献已整理\n💾 成果已存入知识库\n\n✅ 所有流程已完成，可以下载结果文件。\n\n⏱️ 本阶段耗时: {time.time() - start_time:.2f}s",
         ))
         
         logging.info("🏁 整个流程已完成，已通知前端")

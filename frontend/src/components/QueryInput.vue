@@ -7,19 +7,27 @@
     <el-input class="input-area" v-model="query" :autosize="{ minRows: 2, maxRows: 10 }" type="textarea"
       placeholder="与ProposalAgent交流吧！" @keydown="handleKeydown" />
     <div class="button-area">
-      <img src="/src/assets/imgs/send.png" class="send" @click="send">
+      <img v-if="isChatting" src="/src/assets/imgs/stop.png" class="stop" @click="stop(true)" />
+      <img v-else src="/src/assets/imgs/send.png" class="send" @click="send" />
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, onUnmounted, onMounted } from 'vue'
 
 const query = ref("");
 const isCountDown = ref(false);
 const countdown = ref(0);
 const timer = ref<number | null>(null);
+const isChatting = ref<boolean>(false)
 
+const props = defineProps({
+  firstChatting: {
+    type: Boolean,
+    default: false
+  }
+})
 
 const handleKeydown = (event: any) => {
   if (event.key === 'Enter') {
@@ -41,14 +49,23 @@ const handleKeydown = (event: any) => {
 }
 
 const send = () => {
+  if (isChatting.value) return;
   if (isCountDown.value) {
     stopCountDown()
     emit('send', (query.value == null || query.value.trim() == "") ? "用户没有补充信息" : query.value, true)
     query.value = ""
+    isChatting.value = true;
   } else if (query.value != null && query.value.trim() !== "") {
     emit('send', query.value, false)
     query.value = ""
+    isChatting.value = true;
   }
+}
+
+const stop = (handStop: boolean) => {
+  isChatting.value = false;
+  // 如果是手动停止，才触发stop事件
+  if (handStop) emit('stop');
 }
 
 const startCountDown = () => {
@@ -72,14 +89,19 @@ const stopCountDown = () => {
   }
 }
 
-const emit = defineEmits(['send'])
+const emit = defineEmits(['send', 'stop'])
+
+onMounted(() => {
+  isChatting.value = props.firstChatting;
+})
 
 onUnmounted(() => {
   if (timer.value) clearInterval(timer.value);
 })
 
 defineExpose({
-  startCountDown
+  startCountDown,
+  stop
 })
 </script>
 
@@ -154,6 +176,16 @@ defineExpose({
     width: 100%;
     height: 60px;
     background-color: rgba(255, 255, 255, 0.1);
+
+    .stop {
+      width: 35px;
+      margin-right: 20px;
+
+      &:hover {
+        scale: 1.3;
+        cursor: pointer;
+      }
+    }
 
     .send {
       width: 40px;

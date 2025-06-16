@@ -83,3 +83,4 @@ cover/
 .settings
 
 frontend/node_modules
+backend/src/agent/__pycache__

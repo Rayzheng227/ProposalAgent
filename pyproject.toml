@@ -21,7 +21,6 @@ dependencies = [
     "uvicorn>=0.34.3",
     "langchain-chroma>=0.1.2",
     "sentence-transformers>=3.0.1",
-    "langchain-huggingface>=0.0.3",
     "sse-starlette>=2.3.6",
     "uvicorn>=0.34.3",
     "uvicorn[standard]>=0.34.3",
@@ -29,4 +28,5 @@ dependencies = [
     "config>=0.5.1",
     "scholarly>=1.7.11",
     "tavily-python>=0.7.6",
+    "langchain-dashscope>=0.1.8",
 ]
