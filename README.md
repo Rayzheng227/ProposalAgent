@@ -74,22 +74,32 @@ A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization
     TAVILY_API_KEY="your_tavily_api_key"
     ```
 
-### 3. 导出示例
 
-您可以通过 `export2.py` 脚本来生成研究计划书并导出 PDF：
 
+### 🌐 前端展示部分
+
+*   **相关源码**：位于 `/frontend/src/`
+*   **运行方法**：
+    1.  机器上安装 `Node.js`。
+    2.  进入 `frontend` 目录，执行 `npm i` 下载相关依赖。
+    3.  执行 `npm run dev` 运行网页展示。
+*   **端口说明**：前端展示端口 `3000`，后端端口 `8810`。
+*   **注意**：目前已实现第二版，集成了反思模块与下载模块（PDF 下载功能需后端集成后支持）。**禁止在任务执行时刷新页面**，否则可能导致状态记录丢失。
+
+### 🖥️ 后端服务器运行
+
+1. **进入后端目录**：
 ```bash
-# 生成最新的研究计划书并导出PDF
-uv run export2.py
-
-# 或者，指定一个已存在的Markdown文件ID来处理（例如：Research_Proposal_1mivmw501h.md 的ID是 1mivmw501h）
-uv run export2.py 1mivmw501h
-
-# 您也可以指定提案ID（proposal_id）以便在前端追踪进度
-uv run export2.py <your_markdown_file_id> <your_proposal_id>
+cd backend
+```
+2. **运行后端服务器**:
+```bash
+uv run run_server.py
 ```
 
-生成的报告（Markdown 和 PDF）以及 Mermaid 图片将保存在 `output/` 和 `exporter/pdf_output/` 目录下。
+
+
+
 
 ## 📁 项目结构
 
@@ -155,14 +165,4 @@ ProposalAgent 的核心工作流基于 **LangGraph** 构建，采用模块化设
 
 
 
-
-## 🌐 前端展示部分
-
-*   **相关源码**：位于 `/frontend/src/`
-*   **运行方法**：
-    1.  机器上安装 `Node.js`。
-    2.  进入 `frontend` 目录，执行 `npm i` 下载相关依赖。
-    3.  执行 `npm run dev` 运行网页展示。
-*   **端口说明**：前端展示端口 `3000`，后端端口 `8810`。
-*   **注意**：目前已实现第二版，集成了反思模块与下载模块（PDF 下载功能需后端集成后支持）。**禁止在任务执行时刷新页面**，否则可能导致状态记录丢失。
 
