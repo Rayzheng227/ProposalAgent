@@ -241,65 +241,53 @@ def search_web_content_tool(query: str) -> List[Dict]:
 
 @tool
 def search_crossref_papers_tool(query: str, max_results: int = 5) -> List[Dict]:
-    """在 CrossRef 上搜索学术论文"""
+    """
+    使用CrossRef API搜索学术论文。
+    
+    Args:
+        query: 搜索关键词
+        max_results: 最大返回结果数量
+        
+    Returns:
+        List[Dict]: 包含论文信息的字典列表
+    """
     try:
-        logging.info(f"在 CrossRef 上搜索: {query}")
-        from crossref.restful import Works
+        # 构建API URL
+        base_url = "https://api.crossref.org/works"
+        params = {
+            "query": query,
+            "rows": max_results,
+            "select": "DOI,title,author,published-print,container-title,abstract,references-count,is-referenced-by-count",
+            "sort": "relevance",
+            "mailto": "your-email@example.com"  # 建议添加您的邮箱以获取更好的API访问权限
+        }
         
-        # 初始化 Works 对象
-        works = Works()
+        # 发送请求
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
         
-        # 执行搜索，使用正确的布尔值格式
-        results = works.query(query).filter(has_abstract='true').sort('relevance').select(
-            'DOI,title,author,published-print,abstract,reference-count,container-title'
-        )
-        
+        # 解析响应
+        data = response.json()
         papers = []
-        count = 0
         
-        # 遍历结果
-        for item in results:
-            if count >= max_results:
-                break
-                
-            try:
-                # 提取作者信息
-                authors = []
-                for author in item.get('author', []):
-                    author_name = " ".join([
-                        author.get('given', ''),
-                        author.get('family', '')
-                    ]).strip()
-                    if author_name:
-                        authors.append(author_name)
-                
-                # 提取年份
-                year = ""
-                if 'published-print' in item:
-                    date_parts = item['published-print'].get('date-parts', [[]])[0]
-                    if date_parts:
-                        year = str(date_parts[0])
-                
-                paper = {
-                    "title": item.get('title', [''])[0] if item.get('title') else '',
-                    "authors": authors,
-                    "year": year,
-                    "abstract": item.get('abstract', ''),
-                    "doi": item.get('DOI', ''),
-                    "journal": item.get('container-title', [''])[0] if item.get('container-title') else '',
-                    "citations": item.get('reference-count', 0)
-                }
-                papers.append(paper)
-                count += 1
-                
-            except Exception as e:
-                logging.warning(f"处理搜索结果时出错: {e}")
-                continue
-        
+        for item in data.get("message", {}).get("items", []):
+            paper = {
+                "title": item.get("title", [""])[0] if item.get("title") else "",
+                "authors": [author.get("given", "") + " " + author.get("family", "") 
+                          for author in item.get("author", [])],
+                "year": item.get("published-print", {}).get("date-parts", [[None]])[0][0],
+                "journal": item.get("container-title", [""])[0] if item.get("container-title") else "",
+                "doi": item.get("DOI", ""),
+                "abstract": item.get("abstract", ""),
+                "references_count": item.get("references-count", 0),
+                "cited_by_count": item.get("is-referenced-by-count", 0)
+            }
+            papers.append(paper)
+            
         return papers
         
     except Exception as e:
-        logging.error(f"CrossRef 搜索失败: {e}")
+        logging.error(f"CrossRef搜索失败: {str(e)}")
         return []
 
 
@@ -534,53 +522,85 @@ def generate_gantt_chart_tool(timeline_content: str, research_field: str = "") -
 
 @tool
 def search_google_scholar_site_tool(query: str, max_results: int = 5) -> List[Dict]:
-    """在 Google Scholar 上搜索特定网站的学术论文"""
-    try:
-        logging.info(f"在 Google Scholar 上执行 site 搜索: {query}")
-        from scholarly import scholarly, ProxyGenerator
+    """
+    使用Google Scholar搜索学术论文。
+    
+    Args:
+        query: 搜索关键词
+        max_results: 最大返回结果数量
         
-        # 设置代理以避免被封禁
+    Returns:
+        List[Dict]: 包含论文信息的字典列表
+    """
+    try:
+        logging.info(f"在Google Scholar上搜索: {query}")
+        from scholarly import scholarly, ProxyGenerator
+        import time
+        import random
+        
+        # 设置代理
         pg = ProxyGenerator()
         success = pg.FreeProxies()
         if success:
             scholarly.use_proxy(pg)
-            logging.info("✅ 成功设置代理")
+            logging.info("✓ 成功设置代理")
         else:
             logging.warning("⚠️ 无法设置代理，将直接访问")
         
-        # 使用正确的搜索方法
-        search_query = scholarly.search_pubs(query)
-        results = []
-        count = 0
+        # 添加随机延迟
+        time.sleep(random.uniform(2, 5))
         
-        while count < max_results:
+        # 执行搜索
+        search_query = scholarly.search_pubs(query)
+        papers = []
+        count = 0
+        max_retries = 3
+        retry_count = 0
+        
+        while count < max_results and retry_count < max_retries:
             try:
                 pub = next(search_query)
                 # 获取完整的出版物信息
-                pub = scholarly.fill(pub)
-                
-                results.append({
-                    "title": pub.get('bib', {}).get('title', ''),
-                    "authors": pub.get('bib', {}).get('author', []),
-                    "year": pub.get('bib', {}).get('pub_year', ''),
-                    "abstract": pub.get('bib', {}).get('abstract', ''),
-                    "url": pub.get('pub_url', ''),
-                    "citations": pub.get('num_citations', 0),
-                    "journal": pub.get('bib', {}).get('journal', ''),
-                    "doi": pub.get('bib', {}).get('doi', '')
-                })
-                count += 1
-                logging.info(f"✅ 已获取第 {count} 篇论文")
+                try:
+                    pub = scholarly.fill(pub)
+                    paper = {
+                        "title": pub.get('bib', {}).get('title', ''),
+                        "authors": pub.get('bib', {}).get('author', '').split(' and '),
+                        "year": pub.get('bib', {}).get('pub_year', ''),
+                        "abstract": pub.get('bib', {}).get('abstract', ''),
+                        "url": pub.get('pub_url', ''),
+                        "citations": pub.get('num_citations', 0),
+                        "venue": pub.get('bib', {}).get('venue', '')
+                    }
+                    papers.append(paper)
+                    count += 1
+                    logging.info(f"✓ 已获取第 {count} 篇论文")
+                    
+                    # 添加随机延迟
+                    time.sleep(random.uniform(1, 3))
+                    
+                except Exception as e:
+                    logging.warning(f"获取论文详情时出错: {str(e)}")
+                    retry_count += 1
+                    time.sleep(random.uniform(5, 10))  # 出错后等待更长时间
+                    continue
                 
             except StopIteration:
                 logging.info("已到达搜索结果末尾")
                 break
             except Exception as e:
-                logging.warning(f"处理搜索结果时出错: {e}")
+                logging.warning(f"处理搜索结果时出错: {str(e)}")
+                retry_count += 1
+                time.sleep(random.uniform(5, 10))  # 出错后等待更长时间
                 continue
-                
-        logging.info(f"✅ 成功获取 {len(results)} 篇论文")
-        return results
+        
+        if not papers:
+            logging.warning("⚠️ 未能获取任何论文，可能是由于访问限制")
+            return []
+            
+        logging.info(f"✓ 成功获取 {len(papers)} 篇论文")
+        return papers
+        
     except Exception as e:
-        logging.error(f"Google Scholar 搜索失败: {e}")
+        logging.error(f"Google Scholar搜索失败: {str(e)}")
         return []

@@ -15,6 +15,7 @@ from backend.src.entity.stream_mes import StreamAnswerMes
 import sys
 from openai import OpenAI
 from langchain.schema import SystemMessage, HumanMessage
+import argparse
 
 load_dotenv()
 Api_key = os.getenv('DASHSCOPE_API_KEY')
@@ -61,8 +62,8 @@ class ProposalExporter:
             streaming=True,
         )
         
-        # 设置导出步骤
-        self.export_step = 0
+        # 设置导出步骤，使用更高的初始值
+        self.export_step = 100
         
         # 获取当前脚本所在目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -121,86 +122,67 @@ class ProposalExporter:
             return f.read()
     
     def read_markdown_files(self, specific_file: str = None) -> Dict[str, str]:
-        """
-        读取Markdown文件并尝试加载对应的参考文献JSON文件
-        :param specific_file: 指定文件名，如果为None则自动选择最新文件
-        """
+        """读取Markdown文件内容"""
         md_files = {}
-        selected_md_filepath = None
         
-        if specific_file:
-            # 读取指定文件
-            # 尝试两种可能的文件名格式
-            possible_paths = [
-                os.path.join(self.markdown_source_dir, specific_file),  # 直接使用ID
-                os.path.join(self.markdown_source_dir, f"Research_Proposal_{specific_file}.md")  # 使用完整格式
-            ]
-            
-            for file_path in possible_paths:
-                if os.path.exists(file_path):
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        md_files[os.path.basename(file_path)] = content
-                    logging.info(f"✓ 读取指定文件: {file_path}")
-                    selected_md_filepath = file_path
-                    break
+        try:
+            if specific_file:
+                # 如果指定了特定文件，确保使用完整路径
+                if not os.path.isabs(specific_file):
+                    specific_file = os.path.join(self.markdown_source_dir, specific_file)
+                if not os.path.exists(specific_file):
+                    raise FileNotFoundError(f"找不到指定的Markdown文件: {specific_file}")
+                md_files[specific_file] = self._read_file(specific_file)
+                logging.info(f"✓ 成功读取指定文件: {specific_file}")
             else:
-                logging.warning(f"⚠️ 指定文件不存在: {specific_file}")
-        else:
-            # 自动选择最新文件
-            pattern = os.path.join(self.markdown_source_dir, "Research_Proposal_*.md")
-            all_md_files = glob.glob(pattern)
-            
-            if all_md_files:
-                # 按修改时间排序，选择最新的文件
-                latest_file = max(all_md_files, key=os.path.getmtime)
-                filename = os.path.basename(latest_file)
+                # 读取目录中的所有md文件
+                for filename in os.listdir(self.markdown_source_dir):
+                    if filename.endswith('.md'):
+                        filepath = os.path.join(self.markdown_source_dir, filename)
+                        md_files[filepath] = self._read_file(filepath)
+                        logging.info(f"✓ 已读取文件: {filename}")
                 
-                with open(latest_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    md_files[filename] = content
+                if not md_files:
+                    raise FileNotFoundError(f"在目录 {self.markdown_source_dir} 中未找到任何Markdown文件")
                 
+                # 获取最新的文件
+                latest_file = max(md_files.keys(), key=lambda x: os.path.getmtime(x))
                 logging.info(f"✓ 自动选择最新文件: {latest_file}")
-                logging.debug(f"  文件修改时间: {datetime.fromtimestamp(os.path.getmtime(latest_file))}")
-                selected_md_filepath = latest_file
-            else:
-                logging.warning(f"⚠️ 在目录 '{self.markdown_source_dir}' 中未找到任何符合 'Research_Proposal_*.md' 格式的Markdown文件")
-
-        if selected_md_filepath:
-            self._load_references_json(selected_md_filepath)
-        
-        return md_files
+            
+            return md_files
+            
+        except Exception as e:
+            logging.error(f"❌ 读取Markdown文件时发生错误: {str(e)}")
+            raise
 
     def _load_references_json(self, md_filepath: str):
-        """
-        根据Markdown文件路径加载对应的参考文献JSON文件。
-        """
-        md_basename = os.path.basename(md_filepath)
-        if md_basename.startswith("Research_Proposal_"):
-            # Construct reference JSON filename: References_Topic_timestamp_uuid.json
-            # Example: Research_Proposal_LLM_A_..._uuid.md -> References_LLM_A_..._uuid.json
-            ref_json_basename = md_basename.replace("Research_Proposal_", "References_", 1)
-            ref_json_basename = os.path.splitext(ref_json_basename)[0] + ".json" # Ensure .json extension
-            
-            ref_json_filepath = os.path.join(self.markdown_source_dir, ref_json_basename)
-            
-            if os.path.exists(ref_json_filepath):
-                try:
-                    with open(ref_json_filepath, 'r', encoding='utf-8') as f:
-                        self.references_data = json.load(f)
-                    logging.info(f"✓ 成功加载参考文献文件: {ref_json_filepath}")
-                except json.JSONDecodeError:
-                    logging.warning(f"⚠️ 解析参考文献JSON文件失败: {ref_json_filepath}")
-                    self.references_data = None
-                except Exception as e:
-                    logging.error(f"⚠️ 读取参考文献文件时出错: {ref_json_filepath}, Error: {e}")
-                    self.references_data = None
+        """加载参考文献JSON文件"""
+        try:
+            # 从Markdown文件路径中提取ID
+            filename = os.path.basename(md_filepath)
+            if filename.startswith("Research_Proposal_"):
+                proposal_id = filename.replace("Research_Proposal_", "").replace(".md", "")
             else:
-                logging.info(f"ℹ️ 未找到对应的参考文献文件: {ref_json_filepath}")
-                self.references_data = None
-        else:
-            logging.info(f"ℹ️ Markdown文件名 '{md_basename}' 不符合预期的 'Research_Proposal_' 前缀，跳过加载参考文献。")
-            self.references_data = None
+                proposal_id = os.path.splitext(filename)[0]
+            
+            # 首先在output目录下查找
+            ref_filepath = os.path.join("output", f"References_{proposal_id}.json")
+            if not os.path.exists(ref_filepath):
+                # 如果不存在，尝试在markdown_source_dir下查找
+                ref_filepath = os.path.join(self.markdown_source_dir, f"References_{proposal_id}.json")
+            
+            if os.path.exists(ref_filepath):
+                with open(ref_filepath, 'r', encoding='utf-8') as f:
+                    self.references_data = json.load(f)
+                logging.info(f"✓ 成功加载参考文献文件: {ref_filepath}")
+                logging.info(f"ℹ️ 加载了 {len(self.references_data)} 条参考文献")
+            else:
+                logging.warning(f"⚠️ 未找到参考文献文件: {ref_filepath}")
+                self.references_data = []
+                
+        except Exception as e:
+            logging.error(f"❌ 加载参考文献文件时发生错误: {str(e)}")
+            self.references_data = []
 
     def _escape_latex(self, text: str) -> str:
         """Escapes special LaTeX characters in a string."""
@@ -249,50 +231,71 @@ class ProposalExporter:
         return item_text
 
     def _generate_latex_bibliography(self) -> str:
-        """Generates the full LaTeX bibliography section."""
+        """生成LaTeX格式的参考文献部分"""
         if not self.references_data:
+            logging.warning("ℹ️ 未生成参考文献部分 (无数据或错误)")
             return ""
-
-        latex_bib = "" 
-
-        # 使用 \chapter* 以匹配文档其他主要部分的层级
-        # latex_bib += "\\chapter*{参考文献}\n"
-        # 手动将"参考文献"添加到目录中
-        # 第一个参数 'toc' 指的是目录文件
-        # 第二个参数 'chapter' 指的是条目的层级（与\chapter一致）
-        # 第三个参数 '参考文献' 是显示在目录中的文本
-        latex_bib += "\\addcontentsline{toc}{chapter}{参考文献}\n" 
-        
-        # Determine the widest label for thebibliography environment
-        widest_label = "9"
-        if self.references_data:
-            max_id = 0
-            for ref_item in self.references_data:
-                if isinstance(ref_item.get("id"), int) and ref_item.get("id") > max_id:
-                    max_id = ref_item.get("id")
-            if max_id > 9:
-                widest_label = "99"
-            if max_id > 99:
-                widest_label = "999"
-
-        latex_bib += f"\\begin{{thebibliography}}{{{widest_label}}}\n"
-        latex_bib += "  \\setlength{\\itemsep}{0pt} % Optional: to reduce space between items\n"
-
-
-        # Sort references by ID to ensure they match the [1], [2] order
-        sorted_references = sorted(self.references_data, key=lambda x: x.get('id', float('inf')))
-
-        for ref in sorted_references:
-            # The \bibitem command will be numbered automatically by LaTeX.
-            # The key for \bibitem{key} is not strictly needed if we don't \cite{key}
-            # but it's good practice to have one. Using 'ref' + id.
-            # However, since markdown citations are [1], [2], etc., the order is key.
-            # The default numbering of thebibliography will match this if items are ordered.
-            item_content = self._format_single_reference_to_latex(ref)
-            latex_bib += f"  \\bibitem{{{ref.get('id', '')}}} {item_content}\n"
-
-        latex_bib += "\\end{thebibliography}\n"
-        return latex_bib
+            
+        try:
+            bib_items = []
+            for ref in self.references_data:
+                try:
+                    # 提取作者信息
+                    authors = []
+                    if 'author' in ref:
+                        if isinstance(ref['author'], list):
+                            authors = [author.get('name', '') for author in ref['author']]
+                        elif isinstance(ref['author'], str):
+                            authors = [ref['author']]
+                    
+                    # 提取标题
+                    title = ref.get('title', '')
+                    
+                    # 提取年份
+                    year = ref.get('year', '')
+                    
+                    # 提取期刊/会议名称
+                    venue = ref.get('venue', '')
+                    if not venue:
+                        venue = ref.get('journal', '')
+                    
+                    # 提取DOI
+                    doi = ref.get('doi', '')
+                    
+                    # 构建参考文献条目
+                    bib_item = f"\\bibitem{{{ref.get('id', '')}}} "
+                    if authors:
+                        bib_item += f"{', '.join(authors)}. "
+                    if title:
+                        bib_item += f"\\textit{{{self._escape_latex(title)}}}. "
+                    if venue:
+                        bib_item += f"{self._escape_latex(venue)}. "
+                    if year:
+                        bib_item += f"({year}). "
+                    if doi:
+                        bib_item += f"DOI: {doi}"
+                    
+                    bib_items.append(bib_item)
+                    
+                except Exception as e:
+                    logging.warning(f"⚠️ 处理参考文献条目时出错: {str(e)}")
+                    continue
+            
+            if not bib_items:
+                logging.warning("ℹ️ 未生成参考文献部分 (无有效条目)")
+                return ""
+            
+            # 生成完整的参考文献部分
+            bibliography = "\\begin{thebibliography}{99}\n"
+            bibliography += "\n".join(bib_items)
+            bibliography += "\n\\end{thebibliography}"
+            
+            logging.info(f"✓ 成功生成参考文献部分，包含 {len(bib_items)} 条引用")
+            return bibliography
+            
+        except Exception as e:
+            logging.error(f"❌ 生成参考文献部分时发生错误: {str(e)}")
+            return ""
     
     def truncate_content(self, content: str, max_length: int = 120000) -> str:
         """
@@ -397,80 +400,56 @@ class ProposalExporter:
         return '\n'.join(cleaned_lines)
 
     def simple_md_to_latex(self, markdown_content: str) -> str:
-        """将简单的Markdown内容转换为LaTeX格式"""
-        # 处理标题
-        content = re.sub(r'^# (.*?)$', r'\\section{\1}', markdown_content, flags=re.MULTILINE)
-        content = re.sub(r'^## (.*?)$', r'\\subsection{\1}', content, flags=re.MULTILINE)
-        content = re.sub(r'^### (.*?)$', r'\\subsubsection{\1}', content, flags=re.MULTILINE)
-        
+        """简单的Markdown到LaTeX转换"""
         # 处理表格
         def convert_table(match):
-            table_lines = match.group(0).strip().split('\n')
-            if len(table_lines) < 3:  # 至少需要表头、分隔行和一行数据
-                return match.group(0)
-            
-            # 获取列数
-            header = table_lines[0].strip('|').split('|')
-            col_count = len(header)
-            
-            # 根据列数设置列宽
-            if col_count == 3:
-                # 对于三列表格，设置第一列15%，第二列25%，第三列60%
-                col_spec = '|p{0.15\\textwidth}|p{0.25\\textwidth}|p{0.6\\textwidth}|'
-            else:
-                # 对于其他列数的表格，平均分配宽度
-                col_spec = '|' + '|'.join(['X'] * col_count) + '|'
-            
-            # 开始构建LaTeX表格
-            latex_table = [
-                '\\begin{table}[htbp]',
-                '\\centering',
-                '\\begin{tabularx}{\\textwidth}{' + col_spec + '}',
-                '\\hline'
-            ]
+            table_content = match.group(1)
+            lines = table_content.strip().split('\n')
             
             # 处理表头
-            header_cells = [cell.strip() for cell in header]
-            latex_table.append(' & '.join(header_cells) + ' \\\\')
-            latex_table.append('\\hline')
+            header = lines[0].strip('|').split('|')
+            header = [h.strip() for h in header]
             
-            # 跳过分隔行（第二行）
+            # 处理分隔行
+            separator = lines[1].strip('|').split('|')
+            separator = [s.strip() for s in separator]
+            
             # 处理数据行
-            for line in table_lines[2:]:
+            data_rows = []
+            for line in lines[2:]:
                 if line.strip():
-                    cells = [cell.strip() for cell in line.strip('|').split('|')]
-                    if len(cells) == col_count:  # 确保单元格数量匹配
-                        latex_table.append(' & '.join(cells) + ' \\\\')
-                        latex_table.append('\\hline')
+                    cells = line.strip('|').split('|')
+                    cells = [cell.strip() for cell in cells]
+                    data_rows.append(cells)
             
-            latex_table.extend(['\\end{tabularx}', '\\end{table}'])
-            return '\n'.join(latex_table)
+            # 构建LaTeX表格
+            latex_table = "\\begin{table}[htbp]\n\\centering\n\\begin{tabular}{" + "|c" * len(header) + "|}\n\\hline\n"
+            
+            # 添加表头
+            latex_table += " & ".join(header) + " \\\\\n\\hline\n"
+            
+            # 添加数据行
+            for row in data_rows:
+                latex_table += " & ".join(row) + " \\\\\n\\hline\n"
+            
+            latex_table += "\\end{tabular}\n\\end{table}\n"
+            return latex_table
+
+        # 转换表格
+        table_pattern = r"\|(.*?)\|\n\|(.*?)\|\n(\|.*?\|)"
+        markdown_content = re.sub(table_pattern, convert_table, markdown_content, flags=re.DOTALL)
         
-        # 使用正则表达式匹配Markdown表格
-        content = re.sub(r'(\|[^\n]+\n\|[-:| ]+\n(?:\|[^\n]+\n)+)', convert_table, content)
+        # 处理图片
+        image_pattern = r"!\[(.*?)\]\((.*?)\)"
+        def convert_image(match):
+            alt_text = match.group(1)
+            image_path = match.group(2)
+            return f"\\begin{{figure}}[htbp]\n\\centering\n\\includegraphics[width=0.8\\textwidth]{{{image_path}}}\n\\caption{{{alt_text}}}\n\\end{{figure}}"
         
-        # 处理列表
-        content = re.sub(r'^\s*[-*]\s+(.*?)$', r'\\item \1', content, flags=re.MULTILINE)
-        content = re.sub(r'((?:^\s*\\item.*?\n)+)', r'\\begin{itemize}\n\1\\end{itemize}\n', content, flags=re.MULTILINE)
+        markdown_content = re.sub(image_pattern, convert_image, markdown_content)
         
-        # 处理加粗和斜体
-        content = re.sub(r'\*\*(.*?)\*\*', r'\\textbf{\1}', content)
-        content = re.sub(r'\*(.*?)\*', r'\\textit{\1}', content)
-        
-        # 处理代码块
-        content = re.sub(r'```(.*?)\n(.*?)\n```', r'\\begin{lstlisting}[language=\1]\n\2\n\\end{lstlisting}', content, flags=re.DOTALL)
-        
-        # 处理行内代码
-        content = re.sub(r'`(.*?)`', r'\\texttt{\1}', content)
-        
-        # 处理引用
-        content = re.sub(r'^\s*>\s*(.*?)$', r'\\begin{quote}\n\1\n\\end{quote}', content, flags=re.MULTILINE)
-        
-        # 处理水平线
-        content = re.sub(r'^---$', r'\\hline', content, flags=re.MULTILINE)
-        
-        return content
-    
+        return markdown_content
+
     def extract_title(self, content: str) -> str:
         """提取标题"""
         # 首先尝试从第一行或明显的标题标记中提取
@@ -884,209 +863,80 @@ Markdown内容：
         return content_map
     
     def _process_all_mermaid_diagrams(self, markdown_content: str, report_filename_base: str) -> str:
-        """
-        处理所有Mermaid图表：
-        1. 提取Mermaid代码块
-        2. 将每个Mermaid代码块保存为单独的md文件
-        3. 使用mmdc工具将md文件转换为图片
-        4. 在LaTeX中插入生成的图片
-        """
-        logging.info("开始处理所有Mermaid图表...")
-        
-        processed_content = markdown_content
-        # 改进Mermaid代码块匹配模式，使其更严格
-        mermaid_matches = list(re.finditer(r"```mermaid\s*([\s\S]+?)```", markdown_content))
-        
-        if not mermaid_matches:
-            logging.info("未找到Mermaid图表。")
+        """处理所有mermaid图表"""
+        try:
+            # 查找所有mermaid代码块
+            mermaid_pattern = r"```mermaid\n(.*?)\n```"
+            mermaid_blocks = re.finditer(mermaid_pattern, markdown_content, re.DOTALL)
+            
+            for i, match in enumerate(mermaid_blocks):
+                mermaid_code = match.group(1)
+                # 生成唯一的文件名
+                diagram_filename = f"{report_filename_base}_diagram_{i+1}.png"
+                diagram_path = os.path.join(self.output_dir, diagram_filename)
+                
+                # 将mermaid代码转换为图片
+                try:
+                    # 使用mmdc命令生成图片
+                    cmd = f"mmdc -i - -o {diagram_path}"
+                    process = subprocess.Popen(
+                        cmd.split(),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+                    stdout, stderr = process.communicate(input=mermaid_code)
+                    
+                    if process.returncode == 0:
+                        logging.info(f"✅ 成功生成图表: {diagram_filename}")
+                        # 替换mermaid代码块为图片引用
+                        markdown_content = markdown_content.replace(
+                            match.group(0),
+                            f"\n![{diagram_filename}]({diagram_filename})\n"
+                        )
+                    else:
+                        logging.error(f"❌ 生成图表失败: {stderr}")
+                except Exception as e:
+                    logging.error(f"❌ 处理图表时发生错误: {e}")
+                    continue
+            
+            return markdown_content
+        except Exception as e:
+            logging.error(f"❌ 处理mermaid图表时发生错误: {e}")
             return markdown_content
 
-        num_diagrams = len(mermaid_matches)
-        logging.info(f"找到 {num_diagrams} 个Mermaid图表需要处理。")
-
-        for idx, match in enumerate(mermaid_matches):
-            original_mermaid_block = match.group(0)
-            mermaid_code = match.group(1).strip()
-            
-            # 为每个图表创建唯一的标识符
-            image_file_stem = f"{report_filename_base}_mermaid_{idx}"
-            temp_md_filename = f"{image_file_stem}.md"
-            output_png_filename = f"{image_file_stem}.png"
-
-            # 创建临时md文件路径和最终图片路径
-            temp_md_filepath = os.path.join(self.temp_mermaid_files_dir, temp_md_filename)
-            output_png_filepath = os.path.join(self.final_mermaid_images_dir, output_png_filename)
-
-            logging.info(f"处理Mermaid图表 {idx + 1}/{num_diagrams}: {image_file_stem}")
-
-            try:
-                # 将Mermaid代码保存为单独的md文件
-                with open(temp_md_filepath, "w", encoding="utf-8") as mf:
-                    mf.write("```mermaid\n")
-                    mf.write(mermaid_code)
-                    mf.write("\n```")
-                logging.debug(f"已创建临时Mermaid md文件: {temp_md_filepath}")
-
-                # 先将临时md文件复制到图片目录
-                target_md_in_img_dir = os.path.join(self.final_mermaid_images_dir, temp_md_filename)
-                shutil.copy(temp_md_filepath, target_md_in_img_dir)
-
-                # 使用mmdc工具将md文件转换为图片（只用文件名，cwd为图片目录）
-                mmdc_command = [
-                    "mmdc",
-                    "-i", temp_md_filename,  # 只用文件名
-                    "-o", output_png_filename,  # 只用文件名
-                    "-w", "1024",
-                    "-H", "768",
-                    "--backgroundColor", "white"
-                ]
-                logging.debug(f"执行mmdc命令: {' '.join(mmdc_command)}，工作目录: {self.final_mermaid_images_dir}")
-                process = subprocess.run(
-                    mmdc_command,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=60,
-                    cwd=self.final_mermaid_images_dir  # 强制在目标目录下生成
-                )
-
-                # 清理复制到图片目录下的md文件
-                if os.path.exists(target_md_in_img_dir):
-                    try:
-                        os.remove(target_md_in_img_dir)
-                        logging.debug(f"已删除图片目录下的临时md文件: {target_md_in_img_dir}")
-                    except OSError as e_rm:
-                        logging.warning(f"无法删除图片目录下的临时md文件 {target_md_in_img_dir}: {e_rm}")
-
-                if process.returncode == 0:
-                    # 检查图片是否生成在预期位置（支持 -1 后缀）
-                    found_png = None
-                    for _ in range(5):  # 最多重试5次
-                        if os.path.exists(output_png_filepath):
-                            found_png = output_png_filepath
-                            break
-                        # 查找以 image_file_stem 开头的 png 文件（包括 -1 后缀）
-                        for fname in os.listdir(self.final_mermaid_images_dir):
-                            if fname.startswith(image_file_stem) and fname.endswith('.png'):
-                                found_png = os.path.join(self.final_mermaid_images_dir, fname)
-                                break
-                        if found_png:
-                            break
-                        time.sleep(0.2)  # 等待写盘
-                    if found_png:
-                        logging.info(f"✅ Mermaid PNG生成成功: {found_png}")
-                    else:
-                        # 输出目录下所有png文件名
-                        all_pngs = [f for f in os.listdir(self.final_mermaid_images_dir) if f.endswith('.png')]
-                        logging.error(f"⚠️ 无法找到生成的PNG文件: {output_png_filepath} 或 {image_file_stem}-1.png。当前目录下PNG文件: {all_pngs}")
-                    
-                    # 构建LaTeX中的图片路径（相对于main.tex）
-                    latex_image_path = os.path.join("figures", "mermaid_images", output_png_filename)
-                    latex_image_path = latex_image_path.replace("\\", "/")  # 确保使用正斜杠
-
-                    # 尝试从mermaid代码中提取标题作为图片说明
-                    caption_text = f"Mermaid图表 {idx + 1}"  # 默认说明
-                    title_match = re.search(r"^\s*title\s*:\s*(.+)$", mermaid_code, re.MULTILINE | re.IGNORECASE)
-                    if title_match:
-                        caption_text = self._escape_latex(title_match.group(1).strip())
-                    
-                    # 创建唯一的标签
-                    label_text = f"fig:{image_file_stem.replace('_', '-')}"
-
-                    # 生成LaTeX图片代码
-                    latex_code = (
-                        f"\n\n\\begin{{figure}}[htbp]\n"
-                        f"\\centering\n"
-                        f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
-                        f"\\caption{{{caption_text}}}\n"
-                        f"\\label{{{label_text}}}\n"
-                        f"\\end{{figure}}\n\n"
-                    )
-                    
-                    # 替换原始Mermaid代码块为LaTeX图片代码
-                    processed_content = processed_content.replace(original_mermaid_block, latex_code, 1)
-                    logging.debug(f"已将Mermaid代码块 {idx+1} 替换为LaTeX图片代码。")
-
-                else:
-                    logging.error(f"⚠️ 生成Mermaid PNG失败: {image_file_stem}")
-                    logging.error(f"MMDC返回码: {process.returncode}")
-                    logging.error(f"MMDC标准输出: {process.stdout}")
-                    logging.error(f"MMDC错误输出: {process.stderr}")
-                    error_message = self._escape_latex(f"生成Mermaid图表失败: {image_file_stem}。请检查日志。")
-                    processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
-
-            except FileNotFoundError as e:
-                logging.error(f"⚠️ 未找到MMDC命令或生成的文件: {e}")
-                error_message = self._escape_latex(f"未找到MMDC命令或生成的文件: {image_file_stem}。")
-                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
-            except subprocess.TimeoutExpired:
-                logging.error(f"⚠️ MMDC命令超时: {image_file_stem}")
-                error_message = self._escape_latex(f"生成Mermaid图表超时: {image_file_stem}。")
-                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
-            except Exception as e:
-                logging.error(f"⚠️ 处理Mermaid图表时发生异常 {image_file_stem}: {e}", exc_info=True)
-                error_message = self._escape_latex(f"处理Mermaid图表时发生异常: {image_file_stem} - {str(e)}")
-                processed_content = processed_content.replace(original_mermaid_block, f"\n% {error_message}\n", 1)
-            finally:
-                # 清理临时md文件
-                if os.path.exists(temp_md_filepath):
-                    try:
-                        os.remove(temp_md_filepath)
-                        logging.debug(f"已删除临时md文件: {temp_md_filepath}")
-                    except OSError as e_rm:
-                        logging.warning(f"无法删除临时md文件 {temp_md_filepath}: {e_rm}")
-        
-        logging.info("已完成所有Mermaid图表的处理。")
-        return processed_content
-
     def fill_template(self, template: str, content_map: Dict[str, str], md_content_for_mermaid: str, report_filename_base: str) -> str:
-        """
-        将提取的内容填入模板，并处理Mermaid图像
-        :param template: LaTeX模板内容
-        :param content_map: 包含各章节内容的字典
-        :param md_content_for_mermaid: 包含Mermaid图表的Markdown内容
-        :param report_filename_base: 报告文件名基础（用于生成图片文件名）
-        :return: 填充后的模板内容
-        """
-        filled_template = template
-        
-        # 替换标准占位符
-        filled_template = filled_template.replace('[title]', content_map.get('title', '研究计划'))
-        filled_template = filled_template.replace('[time]', content_map.get('time', datetime.now().strftime('%Y年%m月')))
-        filled_template = filled_template.replace('[引言]', content_map.get('引言', ''))
-        filled_template = filled_template.replace('[文献综述]', content_map.get('文献综述', ''))
-        filled_template = filled_template.replace('[研究内容]', content_map.get('研究内容', ''))
-        filled_template = filled_template.replace('[总结]', content_map.get('总结', ''))
-        filled_template = filled_template.replace('[参考文献内容]', content_map.get('参考文献内容', ''))
-        
-        # 查找第一个gantt类型的图片
-        gantt_figure_code = ''
-        image_file_stem = f"{report_filename_base}_mermaid_0"
-        
-        # 检查图片目录中是否存在对应的图片文件
-        for fname in os.listdir(self.final_mermaid_images_dir):
-            if fname.startswith(image_file_stem) and fname.endswith('.png'):
-                # 构建LaTeX中的图片路径（相对于main.tex）
-                latex_image_path = os.path.join("figures", "mermaid_images", fname)
-                latex_image_path = latex_image_path.replace("\\", "/")  # 确保使用正斜杠
+        """填充LaTeX模板"""
+        try:
+            # 处理mermaid图表
+            processed_content = self._process_all_mermaid_diagrams(md_content_for_mermaid, report_filename_base)
+            
+            # 转换所有内容为LaTeX格式
+            for section_type, content in content_map.items():
+                if content:
+                    content_map[section_type] = self.convert_md_to_latex(content, section_type)
+            
+            # 生成参考文献部分
+            bibliography = self._generate_latex_bibliography()
+            
+            # 填充模板
+            filled_template = template.format(
+                title=content_map.get('title', ''),
+                abstract=content_map.get('abstract', ''),
+                introduction=content_map.get('introduction', ''),
+                background=content_map.get('background', ''),
+                methodology=content_map.get('methodology', ''),
+                timeline=content_map.get('timeline', ''),
+                bibliography=bibliography
+            )
+            
+            return filled_template
+            
+        except Exception as e:
+            logging.error(f"❌ 填充模板时发生错误: {e}")
+            raise
 
-                # 生成LaTeX图片代码
-                gantt_figure_code = (
-                    f"\n\n\\begin{{figure}}[htbp]\n"
-                    f"\\centering\n"
-                    f"\\includegraphics[width=0.9\\textwidth]{{{latex_image_path}}}\n"
-                    f"\\caption{{项目时间规划甘特图}}\n"
-                    f"\\label{{fig:gantt}}\n"
-                    f"\\end{{figure}}\n\n"
-                )
-                logging.debug(f'✅ 使用已生成的甘特图图片: {fname}')
-                break
-
-        # 替换模板中的占位符
-        filled_template = filled_template.replace('[Mermaid Image]', gantt_figure_code)
-        
-        return filled_template
-    
     def compile_with_xelatex(self, tex_filename: str, output_dir: str = None) -> bool:
         """
         使用xelatex编译LaTeX文件生成PDF
@@ -1105,11 +955,21 @@ Markdown内容：
         tex_full_path = os.path.join(output_dir, tex_basename)
 
         logging.info(f"正在使用xelatex编译: {tex_full_path}")
+        self.send_progress_message("编译LaTeX", f"🔄 正在编译LaTeX文件: {tex_basename}")
+
+        # 检查源文件是否存在
+        if not os.path.exists(tex_full_path):
+            error_msg = f"❌ 找不到源文件: {tex_full_path}"
+            logging.error(error_msg)
+            self.send_progress_message("错误", error_msg)
+            return False
 
         # 复制 .cls 文件
         cls_source_file = os.path.join(self.exporter_dir, "phdproposal.cls")
         if not os.path.exists(cls_source_file):
-            logging.error(f"❌ 找不到类文件: {cls_source_file}")
+            error_msg = f"❌ 找不到类文件: {cls_source_file}"
+            logging.error(error_msg)
+            self.send_progress_message("错误", error_msg)
             return False
         
         import shutil
@@ -1118,7 +978,9 @@ Markdown内容：
             shutil.copy2(cls_source_file, target_cls_file)
             logging.info(f"✓ 已复制类文件到: {target_cls_file}")
         except Exception as e:
-            logging.error(f"❌ 复制类文件失败: {e}")
+            error_msg = f"❌ 复制类文件失败: {e}"
+            logging.error(error_msg)
+            self.send_progress_message("错误", error_msg)
             return False
 
         # 复制 Logo 文件和 figures 目录
@@ -1132,8 +994,8 @@ Markdown内容：
                 shutil.copy2(logo_source_file, target_logo_file)
                 logging.info(f"✓ 已复制Logo文件到: {target_logo_file}")
             except Exception as e:
-                logging.error(f"❌ 复制Logo文件失败: {e}")
-                # 根据需求决定是否在此处返回False，如果Logo是可选的，可以继续
+                logging.warning(f"⚠️ 复制Logo文件失败: {e}")
+                # Logo是可选的，继续执行
         else:
             logging.warning(f"⚠️ 未找到Logo文件: {logo_source_file}，将不包含Logo。")
 
@@ -1141,9 +1003,19 @@ Markdown内容：
             original_cwd = os.getcwd()
             os.chdir(output_dir) # 切换到编译目录
             logging.debug(f"当前工作目录: {os.getcwd()}")
-            logging.debug(f"编译文件: {tex_basename}") # 应该只编译文件名
+            logging.debug(f"编译文件: {tex_basename}")
+
+            # 检查xelatex命令是否可用
+            try:
+                subprocess.run(['xelatex', '--version'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                error_msg = "❌ 未找到xelatex命令，请确保已安装LaTeX环境\nUbuntu/Debian: sudo apt-get install texlive-full\nCentOS/RHEL: sudo yum install texlive-scheme-full"
+                logging.error(error_msg)
+                self.send_progress_message("错误", error_msg)
+                return False
 
             # 第一次编译
+            self.send_progress_message("编译LaTeX", "🔄 正在进行第一次编译...")
             result1 = subprocess.run([
                 'xelatex',
                 '-interaction=nonstopmode',
@@ -1152,18 +1024,23 @@ Markdown内容：
             ], capture_output=True, text=True, timeout=120)
 
             if result1.returncode != 0:
-                logging.error(f"❌ 第一次xelatex编译失败:")
-                logging.error(f"标准输出: {result1.stdout}")
-                logging.error(f"错误输出: {result1.stderr}")
+                error_msg = f"❌ 第一次xelatex编译失败:\n标准输出: {result1.stdout}\n错误输出: {result1.stderr}"
+                logging.error(error_msg)
+                self.send_progress_message("错误", error_msg)
+                
+                # 检查并输出log文件内容
                 log_file = f"{tex_name_without_ext}.log"
                 if os.path.exists(log_file):
-                    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        log_content = f.read()
-                        logging.error(f"Log文件内容:\n{log_content[-1000:]}")
+                    try:
+                        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            log_content = f.read()
+                            logging.error(f"Log文件内容:\n{log_content[-2000:]}")  # 增加输出长度
+                    except Exception as e:
+                        logging.error(f"读取log文件失败: {e}")
                 return False
 
             # 第二次编译（处理交叉引用）
-            logging.info("正在进行第二次编译（处理交叉引用）...")
+            self.send_progress_message("编译LaTeX", "🔄 正在进行第二次编译（处理交叉引用）...")
             result2 = subprocess.run([
                 'xelatex',
                 '-interaction=nonstopmode',
@@ -1172,36 +1049,40 @@ Markdown内容：
             ], capture_output=True, text=True, timeout=120)
 
             if result2.returncode != 0:
-                logging.error(f"❌ 第二次xelatex编译失败:")
-                logging.error(f"错误输出: {result2.stderr}")
+                error_msg = f"❌ 第二次xelatex编译失败:\n错误输出: {result2.stderr}"
+                logging.error(error_msg)
+                self.send_progress_message("错误", error_msg)
                 return False
 
             pdf_filename = f"{tex_name_without_ext}.pdf"
             if os.path.exists(pdf_filename):
-                logging.info(f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}")
+                success_msg = f"✅ PDF文件生成成功: {os.path.join(os.getcwd(), pdf_filename)}"
+                logging.info(success_msg)
+                self.send_progress_message("完成", success_msg)
                 self._cleanup_temp_files(tex_name_without_ext)
                 try:
-                    os.remove("phdproposal.cls") # 清理复制的cls文件
-                    if os.path.exists(target_figures_dir): # 清理复制的figures目录
+                    os.remove("phdproposal.cls")
+                    if os.path.exists(target_figures_dir):
                         shutil.rmtree(target_figures_dir)
                     logging.info("✓ 已清理临时类文件和Logo文件")
                 except Exception as e:
                     logging.warning(f"⚠️ 清理临时文件失败: {e}")
                 return True
             else:
-                logging.error("❌ PDF文件未能生成")
+                error_msg = "❌ PDF文件未能生成"
+                logging.error(error_msg)
+                self.send_progress_message("错误", error_msg)
                 return False
 
         except subprocess.TimeoutExpired:
-            logging.error("❌ xelatex编译超时")
-            return False
-        except FileNotFoundError:
-            logging.error("❌ 未找到xelatex命令，请确保已安装LaTeX环境")
-            logging.info("Ubuntu/Debian: sudo apt-get install texlive-full")
-            logging.info("CentOS/RHEL: sudo yum install texlive-scheme-full")
+            error_msg = "❌ xelatex编译超时"
+            logging.error(error_msg)
+            self.send_progress_message("错误", error_msg)
             return False
         except Exception as e:
-            logging.error(f"❌ 编译过程中发生错误: {e}")
+            error_msg = f"❌ 编译过程中发生错误: {e}"
+            logging.error(error_msg)
+            self.send_progress_message("错误", error_msg)
             return False
         finally:
             os.chdir(original_cwd)  # 恢复原始工作目录
@@ -1219,16 +1100,25 @@ Markdown内容：
                     logging.warning(f"清理临时文件失败 {temp_file}: {e}")
     
     def send_progress_message(self, title: str, content: str, step: int = None, is_finish: bool = False):
-        """发送进度消息"""
-        import json
-        message = json.dumps({
+        """发送进度消息到前端"""
+        if step is None:
+            step = self.export_step
+            self.export_step += 1  # 每次发送消息后增加step值
+        
+        # 确保content以\n\n开头
+        if not content.startswith("\n\n"):
+            content = "\n\n" + content
+            
+        message = {
             "proposal_id": self.proposal_id,
             "step": step,
             "title": title,
             "content": content,
             "is_finish": is_finish
-        })
-        logging.info(f"QUEUE_MESSAGE:{message}")  # 使用logging而不是print
+        }
+        
+        # 使用json.dumps确保消息格式正确
+        print(f"QUEUE_MESSAGE:{json.dumps(message)}", flush=True)
 
 
     def export_proposal(self, output_filename: str = "generated_proposal.tex", compile_pdf: bool = True, specific_file: str = None):
@@ -1236,8 +1126,8 @@ Markdown内容：
         主函数：导出完整的研究计划
         """
         try:
-            # 重置导出步骤计数器
-            self.export_step = 0
+            # 重置导出步骤计数器，使用更高的初始值
+            self.export_step = 100
             
             self.send_progress_message("开始导出", "🔄 开始导出研究计划...")
             logging.info("开始导出")
@@ -1260,6 +1150,7 @@ Markdown内容：
             try:
                 md_files = self.read_markdown_files(specific_file)
                 logging.info("✅ 成功读取Markdown文件")
+                logging.info(f"文件为: {list(md_files.keys())}")
                 self.send_progress_message("读取文件", "📚 读取Markdown文件...")
             except FileNotFoundError as e:
                 logging.error(f"❌ 未找到Markdown文件: {e}")
@@ -1280,122 +1171,153 @@ Markdown内容：
                 self.send_progress_message("错误", f"❌ 提取内容时发生错误: {e}")
                 raise
             
-            # 处理Mermaid图表
+            # 加载参考文献
             try:
-                md_content_for_mermaid = "\n".join(md_files.values())
-                logging.info("✅ 成功合并Markdown内容用于处理Mermaid图表")
-                self.send_progress_message("处理图表", "📊 处理Mermaid图表...")
+                md_filepath = list(md_files.keys())[0]  # 使用第一个Markdown文件
+                self._load_references_json(md_filepath)
+                if self.references_data:
+                    logging.info("✅ 成功加载参考文献")
+                    self.send_progress_message("加载参考文献", "📚 加载参考文献...")
+                else:
+                    logging.warning("⚠️ 未找到参考文献数据")
+                    self.send_progress_message("警告", "⚠️ 未找到参考文献数据")
             except Exception as e:
-                logging.error(f"❌ 处理Mermaid图表时发生错误: {e}")
-                self.send_progress_message("错误", f"❌ 处理Mermaid图表时发生错误: {e}")
+                logging.error(f"❌ 加载参考文献时发生错误: {e}")
+                self.send_progress_message("错误", f"❌ 加载参考文献时发生错误: {e}")
                 raise
+            
+            # 生成报告文件名
+            if specific_file:
+                report_filename_base = os.path.splitext(os.path.basename(specific_file))[0]
+            else:
+                report_filename_base = os.path.splitext(os.path.basename(list(md_files.keys())[0]))[0]
             
             # 填充模板
             try:
-                filled_template = self.fill_template(template, content_map, md_content_for_mermaid, output_filename)
-                logging.info("✅ 成功填充LaTeX模板")
+                filled_template = self.fill_template(template, content_map, list(md_files.values())[0], report_filename_base)
+                logging.info("✅ 成功填充模板")
                 self.send_progress_message("填充模板", "📝 填充LaTeX模板...")
             except Exception as e:
                 logging.error(f"❌ 填充模板时发生错误: {e}")
                 self.send_progress_message("错误", f"❌ 填充模板时发生错误: {e}")
                 raise
             
-            # 保存文件
+            # 保存LaTeX文件
             try:
-                output_path = os.path.join(self.output_dir, output_filename)
-                with open(output_path, "w", encoding="utf-8") as f:
+                tex_filename = f"{report_filename_base}.tex"
+                tex_path = os.path.join(self.output_dir, tex_filename)
+                with open(tex_path, 'w', encoding='utf-8') as f:
                     f.write(filled_template)
-                logging.info(f"✅ 成功保存LaTeX文件到: {output_path}")
+                logging.info(f"✅ 成功保存LaTeX文件: {tex_path}")
                 self.send_progress_message("保存文件", "💾 保存LaTeX文件...")
             except Exception as e:
-                logging.error(f"❌ 保存文件时发生错误: {e}")
-                self.send_progress_message("错误", f"❌ 保存文件时发生错误: {e}")
+                logging.error(f"❌ 保存LaTeX文件时发生错误: {e}")
+                self.send_progress_message("错误", f"❌ 保存LaTeX文件时发生错误: {e}")
                 raise
-            
             
             # 编译PDF
             if compile_pdf:
-                self.send_progress_message("编译PDF", "🔄 开始编译PDF...")
-                logging.info("开始编译pdf")
-                success = self.compile_with_xelatex(output_filename)
-                if success:
-                    self.send_progress_message("完成", "✅ PDF编译成功！", is_finish=True)
-                    logging.info("pdf编译成功")
-                else:
-                    self.send_progress_message("错误", "❌ PDF编译失败", is_finish=True)
-                    logging.info("pdf编译失败")
-            else:
-                self.send_progress_message("完成", "✅ 导出完成！", is_finish=True)
-                logging.info("PDF导出成功")
-                
+                try:
+                    if self.compile_with_xelatex(tex_filename):
+                        pdf_filename = f"{report_filename_base}.pdf"
+                        logging.info(f"✅ 成功生成PDF文件: {pdf_filename}")
+                        self.send_progress_message("完成", f"✅ 成功生成PDF文件: {pdf_filename}")
+                    else:
+                        error_msg = "❌ PDF编译失败"
+                        logging.error(error_msg)
+                        self.send_progress_message("错误", error_msg)
+                        raise Exception(error_msg)
+                except Exception as e:
+                    logging.error(f"❌ 编译PDF时发生错误: {e}")
+                    self.send_progress_message("错误", f"❌ 编译PDF时发生错误: {e}")
+                    raise
+            
             return True
             
         except Exception as e:
-            logging.error(f"导出失败: {str(e)}")
-            self.send_progress_message("错误", f"❌ 导出失败: {str(e)}", is_finish=True)
-            return False
+            logging.error(f"❌ 导出过程中发生错误: {e}")
+            self.send_progress_message("错误", f"❌ 导出过程中发生错误: {e}")
+            raise
+
+    def _read_file(self, filepath: str) -> str:
+        """读取文件内容"""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return content
+        except Exception as e:
+            logging.error(f"❌ 读取文件失败 {filepath}: {str(e)}")
+            raise
 
 def main():
-    """主函数示例"""
-    import sys
-    specific_md_file = None
-    proposal_id = None
+    # 设置环境变量以防止自动打开文件
+    os.environ.update({
+        'EDITOR': 'none',
+        'VISUAL': 'none',
+        'LATEX_EDITOR': 'none',
+        'TEXEDIT': 'none',
+        'TEX_EDITOR': 'none',
+        'PYTHONUNBUFFERED': '1'
+    })
     
     # 解析命令行参数
-    if len(sys.argv) > 1:
-        specific_md_file = sys.argv[1]
-        logging.info(f"使用指定Markdown文件: {specific_md_file}")
-    if len(sys.argv) > 2:
-        proposal_id = sys.argv[2]
-        logging.info(f"使用提案ID: {proposal_id}")
+    parser = argparse.ArgumentParser(description='导出提案为LaTeX和PDF格式')
+    parser.add_argument('markdown_file', nargs='?', help='要导出的Markdown文件路径（可选，默认使用最新的md文件）')
+    parser.add_argument('proposal_id', nargs='?', default='none', help='提案ID（可选，默认为none）')
+    args = parser.parse_args()
     
-    exporter = ProposalExporter(proposal_id=proposal_id)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 尝试从文件名提取研究领域部分
-    research_field_for_filename = "proposal" 
-    temp_md_files = exporter.read_markdown_files(specific_md_file)
-    if temp_md_files:
-        first_filename = list(temp_md_files.keys())[0]
-        match = re.search(r'Research_Proposal_([^_]+(?:_[^_]+)*)_proposal', first_filename)
-        if match:
-            research_field_for_filename = match.group(1)
+    try:
+        # 创建导出器实例
+        exporter = ProposalExporter(proposal_id=args.proposal_id)
+        
+        # 如果没有指定markdown文件，则使用最新的md文件
+        if not args.markdown_file:
+            md_files = exporter.read_markdown_files()
+            if not md_files:
+                raise FileNotFoundError("未找到任何Markdown文件")
+            # 获取最新的md文件
+            latest_md = max(md_files.keys(), key=lambda x: os.path.getmtime(x))
+            args.markdown_file = latest_md
+            logging.info(f"使用最新的Markdown文件: {args.markdown_file}")
         else:
-            research_field_for_filename = os.path.splitext(first_filename)[0].replace("Research_Proposal_", "").replace("_proposal", "")[:30]
-    
-    output_tex_filename = f"{research_field_for_filename}_{timestamp}.tex"
-    
-    logging.info(f"🔄 正在导出研究计划为 {output_tex_filename} 并编译PDF...")
-    success = exporter.export_proposal(
-        output_filename=output_tex_filename,
-        compile_pdf=True,
-        specific_file=specific_md_file
-    )
-    
-    if success:
-        logging.info(f"\n导出完成！")
-        logging.info(f"LaTeX文件: {os.path.join(exporter.output_dir, output_tex_filename)}")
-        logging.info("✅ 所有文件已成功生成！")
-        QueueUtil.push_mes(StreamAnswerMes(
-                proposal_id = proposal_id,
-                step=100,
-                title="流程完成",
-                content=f"\n🎉 pdf成功导出",
-                is_finish=True
-            ))
-        try:
-            import platform
-            if platform.system() == "Linux":
-                subprocess.run(['xdg-open', os.path.join(exporter.output_dir, output_tex_filename)], check=False)
-            elif platform.system() == "Darwin":
-                subprocess.run(['open', os.path.join(exporter.output_dir, output_tex_filename)], check=False)
-            elif platform.system() == "Windows":
-                subprocess.run(['start', os.path.join(exporter.output_dir, output_tex_filename)], shell=True, check=False)
-        except Exception as e:
-            logging.error(f"无法自动打开PDF文件: {e}. 请手动打开: {os.path.join(exporter.output_dir, output_tex_filename)}")
-    else:
-        logging.error("❌ 导出失败。")
+            # 如果指定了文件，确保使用完整路径
+            if not os.path.isabs(args.markdown_file):
+                args.markdown_file = os.path.join(exporter.markdown_source_dir, args.markdown_file)
+            logging.info(f"使用指定的Markdown文件: {args.markdown_file}")
+        
+        # 验证文件是否存在
+        if not os.path.exists(args.markdown_file):
+            raise FileNotFoundError(f"找不到指定的Markdown文件: {args.markdown_file}")
+        
+        logging.info(f"提案ID: {args.proposal_id}")
+        
+        # 生成时间戳
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # 从文件名中提取研究领域
+        research_field = os.path.basename(args.markdown_file).split('_')[0]
+        
+        # 构建输出文件名
+        output_filename = f"{args.proposal_id}_{timestamp}.tex"
+        
+        # 导出提案
+        success = exporter.export_proposal(
+            output_filename=output_filename,
+            compile_pdf=True,
+            specific_file=args.markdown_file
+        )
+        
+        if success:
+            logging.info("\n导出完成！")
+            logging.info(f"LaTeX文件: {os.path.join(exporter.output_dir, output_filename)}")
+            logging.info("✅ 所有文件已成功生成！")
+        else:
+            logging.error("❌ 导出失败！")
+            sys.exit(1)
+            
+    except Exception as e:
+        logging.error(f"❌ 导出过程中发生错误: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
