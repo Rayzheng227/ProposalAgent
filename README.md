@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Agent that make Research Proposals</strong>
+  <strong>A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization</strong>
 </p>
 
 # ProposalAgent
@@ -13,6 +13,13 @@ A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization
 郑锐、谢秋云、樊彬峰、禚宣伟、吴业阳
 
 ---
+
+## 🔄 工作流程
+
+<p align="center">
+  <img src="media/Workflow.jpg" alt="工作流程" style="width: 100%; max-width: 1000px;" />
+</p>
+
 
 
 ## 项目简介
@@ -84,7 +91,7 @@ A Multi-Agent System for End-to-End Research Proposal Drafting and Optimization
     2.  进入 `frontend` 目录，执行 `npm i` 下载相关依赖。
     3.  执行 `npm run dev` 运行网页展示。
 *   **端口说明**：前端展示端口 `3000`，后端端口 `8810`。
-
+*   **注意**：目前已实现第二版，集成了反思模块与下载模块（PDF 下载功能需后端集成后支持）。**禁止在任务执行时刷新页面**，否则可能导致状态记录丢失。
 
 ### 🖥️ 后端服务器运行
 
